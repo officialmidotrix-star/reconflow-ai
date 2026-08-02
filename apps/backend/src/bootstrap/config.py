@@ -43,3 +43,15 @@ def has_anthropic_credentials() -> bool:
 
 def has_smtp_credentials() -> bool:
     return bool(os.environ.get("SMTP_HOST") and os.environ.get("SMTP_FROM_ADDRESS"))
+
+
+def get_allowed_origins() -> list[str]:
+    raw = os.environ.get("RECONFLOW_ALLOWED_ORIGINS")
+    if raw:
+        return [origin.strip() for origin in raw.split(",") if origin.strip()]
+    logger.warning(
+        "RECONFLOW_ALLOWED_ORIGINS is not set - falling back to local Vite dev "
+        "origins only (http://localhost:5173, http://127.0.0.1:5173). A deployed "
+        "frontend on any other origin will be blocked by CORS until this is set."
+    )
+    return ["http://localhost:5173", "http://127.0.0.1:5173"]

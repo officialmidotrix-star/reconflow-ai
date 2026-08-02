@@ -1,0 +1,631 @@
+diff --git a/apps/backend/src/bootstrap/config.py b/apps/backend/src/bootstrap/config.py
+index f26215b..3c87699 100644
+--- a/apps/backend/src/bootstrap/config.py
++++ b/apps/backend/src/bootstrap/config.py
+@@ -43,3 +43,15 @@ def has_anthropic_credentials() -> bool:
+ 
+ def has_smtp_credentials() -> bool:
+     return bool(os.environ.get("SMTP_HOST") and os.environ.get("SMTP_FROM_ADDRESS"))
++
++
++def get_allowed_origins() -> list[str]:
++    raw = os.environ.get("RECONFLOW_ALLOWED_ORIGINS")
++    if raw:
++        return [origin.strip() for origin in raw.split(",") if origin.strip()]
++    logger.warning(
++        "RECONFLOW_ALLOWED_ORIGINS is not set - falling back to local Vite dev "
++        "origins only (http://localhost:5173, http://127.0.0.1:5173). A deployed "
++        "frontend on any other origin will be blocked by CORS until this is set."
++    )
++    return ["http://localhost:5173", "http://127.0.0.1:5173"]
+diff --git a/apps/backend/src/bootstrap/wiring.py b/apps/backend/src/bootstrap/wiring.py
+index dbc3991..435963e 100644
+--- a/apps/backend/src/bootstrap/wiring.py
++++ b/apps/backend/src/bootstrap/wiring.py
+@@ -35,6 +35,7 @@ from .database import get_db
+ # every table on Base.metadata) and its service/exceptions/dependencies.
+ from modules.ai_insights import router as ai_insights_router
+ from modules.analysis_orchestration import router as analysis_orchestration_router
++from modules.analysis_results import router as analysis_results_router
+ from modules.audit_logging import router as audit_logging_router
+ from modules.deployment import router as deployment_router
+ from modules.discrepancies import router as discrepancies_router
+@@ -55,6 +56,7 @@ from modules.ai_insights.dependencies import FakeAIProvider
+ from modules.ai_insights.providers.anthropic_provider import AnthropicAIProvider
+ from modules.ai_insights.service import AIInsightService
+ from modules.analysis_orchestration.service import AnalysisOrchestrationService
++from modules.analysis_results.service import AnalysisResultsService
+ from modules.audit_logging.service import AuditLogService
+ from modules.deployment.service import DeploymentService
+ from modules.discrepancies.service import DiscrepancyService
+@@ -205,6 +207,10 @@ def _orchestration_service(db: Session = Depends(get_db)) -> AnalysisOrchestrati
+     return AnalysisOrchestrationService(db=db, audit_logger=_audit_logger(db))
+ 
+ 
++def _analysis_results_service(db: Session = Depends(get_db)) -> AnalysisResultsService:
++    return AnalysisResultsService(db=db)
++
++
+ def _report_service(db: Session = Depends(get_db)) -> ReportService:
+     return ReportService(db=db, storage=_storage, audit_logger=_audit_logger(db))
+ 
+@@ -250,6 +256,7 @@ _ALL_ROUTERS = [
+     manual_review_router,
+     ai_insights_router,
+     analysis_orchestration_router,
++    analysis_results_router,
+     reporting_router,
+     notification_router,
+ ]
+@@ -260,7 +267,7 @@ _ALL_ROUTERS = [
+ _USER_ID_AUTH_MODULES = [
+     validation_router, normalization_router, matching_router, financial_comparison_router,
+     discrepancies_router, manual_review_router, ai_insights_router,
+-    analysis_orchestration_router, reporting_router, notification_router,
++    analysis_orchestration_router, analysis_results_router, reporting_router, notification_router,
+     organizations_router, reference_contracts_router, audit_logging_router, deployment_router,
+ ]
+ 
+@@ -274,6 +281,7 @@ _SERVICE_OVERRIDES = {
+     manual_review_router.get_manual_review_service: _manual_review_service,
+     ai_insights_router.get_ai_insight_service: _ai_insight_service,
+     analysis_orchestration_router.get_orchestration_service: _orchestration_service,
++    analysis_results_router.get_results_service: _analysis_results_service,
+     reporting_router.get_report_service: _report_service,
+     notification_router.get_notification_service: _notification_service,
+     identity_access_router.get_identity_access_service: _identity_access_service,
+diff --git a/apps/backend/src/main.py b/apps/backend/src/main.py
+index eb7e66c..e2d1bf4 100644
+--- a/apps/backend/src/main.py
++++ b/apps/backend/src/main.py
+@@ -14,7 +14,9 @@ from __future__ import annotations
+ from contextlib import asynccontextmanager
+ 
+ from fastapi import FastAPI
++from fastapi.middleware.cors import CORSMiddleware
+ 
++from bootstrap.config import get_allowed_origins
+ from bootstrap.database import create_all_tables
+ from bootstrap.wiring import register_all
+ 
+@@ -31,6 +33,18 @@ app = FastAPI(
+     lifespan=lifespan,
+ )
+ 
++# The API takes its credential as a bearer token in an Authorization
++# header, never a cookie, so a wildcard origin here can't be leveraged
++# for the ambient-credential CSRF-style attacks wildcard CORS enables on
++# cookie-authenticated APIs. Still pinned to an explicit allowlist rather
++# than "*" as ordinary hygiene - see get_allowed_origins().
++app.add_middleware(
++    CORSMiddleware,
++    allow_origins=get_allowed_origins(),
++    allow_methods=["*"],
++    allow_headers=["*"],
++)
++
+ register_all(app)
+ 
+ 
+diff --git a/apps/backend/src/modules/analysis_results/__init__.py b/apps/backend/src/modules/analysis_results/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/apps/backend/src/modules/analysis_results/exceptions.py b/apps/backend/src/modules/analysis_results/exceptions.py
+new file mode 100644
+index 0000000..43816bc
+--- /dev/null
++++ b/apps/backend/src/modules/analysis_results/exceptions.py
+@@ -0,0 +1,15 @@
++from __future__ import annotations
++
++
++class AnalysisResultsError_(Exception):
++    error_code: str = "ANALYSIS_RESULTS_ERROR"
++    http_status: int = 400
++
++    def __init__(self, message: str) -> None:
++        super().__init__(message)
++        self.message = message
++
++
++class AnalysisNotFoundError(AnalysisResultsError_):
++    error_code = "ANALYSIS_NOT_FOUND"
++    http_status = 404
+diff --git a/apps/backend/src/modules/analysis_results/router.py b/apps/backend/src/modules/analysis_results/router.py
+new file mode 100644
+index 0000000..9d677b6
+--- /dev/null
++++ b/apps/backend/src/modules/analysis_results/router.py
+@@ -0,0 +1,66 @@
++"""
++HTTP layer for the Analysis Results module.
++
++Shares the "/analyses" prefix with Analysis Orchestration's router - a
++second APIRouter under the same prefix, not an extension of that
++module's own router. Kept separate because these two endpoints are a
++different concern (a cross-module read model for a frontend) from that
++module's actual job (owning the analysis lifecycle state machine), same
++reasoning every other module boundary in this codebase already follows.
++FastAPI has no issue mounting two routers under one shared prefix as
++long as the full paths don't collide, and they don't:
++/analyses/{id}/mark-processing (Orchestration) vs. /analyses/{id}/summary
++(this module).
++"""
++
++from __future__ import annotations
++
++from fastapi import APIRouter, Depends, HTTPException
++
++from .exceptions import AnalysisResultsError_
++from .schemas import AnalysisSummaryResponse, DiscrepancyDetailResponse
++from .service import AnalysisResultsService
++
++router = APIRouter(prefix="/analyses", tags=["analysis-results"])
++
++
++def get_results_service() -> AnalysisResultsService:
++    """Real wiring assembled at application start-up, same pattern as
++    every other module's router."""
++    raise NotImplementedError(
++        "Wire up AnalysisResultsService (db session) at application start-up "
++        "and override this dependency."
++    )
++
++
++def get_current_user_id() -> str:
++    """Placeholder for the Identity & Access module's auth dependency."""
++    raise NotImplementedError("Wire up real authentication in the Identity & Access module.")
++
++
++@router.get("/{analysis_id}/summary", response_model=AnalysisSummaryResponse)
++async def get_summary(
++    analysis_id: str,
++    _requested_by: str = Depends(get_current_user_id),
++    service: AnalysisResultsService = Depends(get_results_service),
++) -> AnalysisSummaryResponse:
++    try:
++        return service.get_summary(analysis_id)
++    except AnalysisResultsError_ as exc:
++        raise HTTPException(
++            status_code=exc.http_status, detail={"error_code": exc.error_code, "message": exc.message}
++        ) from exc
++
++
++@router.get("/{analysis_id}/discrepancies", response_model=list[DiscrepancyDetailResponse])
++async def list_discrepancies(
++    analysis_id: str,
++    _requested_by: str = Depends(get_current_user_id),
++    service: AnalysisResultsService = Depends(get_results_service),
++) -> list[DiscrepancyDetailResponse]:
++    try:
++        return service.list_discrepancies(analysis_id)
++    except AnalysisResultsError_ as exc:
++        raise HTTPException(
++            status_code=exc.http_status, detail={"error_code": exc.error_code, "message": exc.message}
++        ) from exc
+diff --git a/apps/backend/src/modules/analysis_results/schemas.py b/apps/backend/src/modules/analysis_results/schemas.py
+new file mode 100644
+index 0000000..5194a8d
+--- /dev/null
++++ b/apps/backend/src/modules/analysis_results/schemas.py
+@@ -0,0 +1,61 @@
++"""
++Response schemas for the Analysis Results module.
++
++Every other module's response schema mirrors exactly one ORM row
++(`model_config = ConfigDict(from_attributes=True)`, `Model.model_validate(obj)`).
++These two don't: AnalysisSummaryResponse is an aggregate across five
++other modules' tables with no single backing row, and
++DiscrepancyDetailResponse joins in a field (order_reference) that isn't
++on the Discrepancy row it's mostly built from. Both are constructed with
++explicit keyword arguments in the service instead, deliberately, rather
++than forcing an ORM-mirroring shape onto data that was never one row to
++begin with.
++"""
++
++from __future__ import annotations
++
++from datetime import datetime
++from decimal import Decimal
++
++from pydantic import BaseModel
++
++from modules.analysis_orchestration.models import AnalysisStatus
++from modules.discrepancies.models import DiscrepancyCategory, Severity
++
++
++class DiscrepancyBreakdownItem(BaseModel):
++    category: DiscrepancyCategory
++    count: int
++    total_amount: Decimal
++
++
++class AnalysisSummaryResponse(BaseModel):
++    analysis_id: str
++    status: AnalysisStatus
++
++    orders_processed: int
++    matched_count: int
++    unmatched_pos_count: int
++    unmatched_platform_count: int
++
++    total_potential_revenue_leakage: Decimal
++    discrepancy_breakdown: list[DiscrepancyBreakdownItem]
++
++    # None until AI Insights has actually run for this analysis - a
++    # results page should treat that as "not generated yet", not as an
++    # error, since it's a legitimate pipeline state (e.g. AWAITING_FILES
++    # or PROCESSING, before that step has been reached).
++    ai_executive_summary: str | None
++    ai_provider_name: str | None
++
++
++class DiscrepancyDetailResponse(BaseModel):
++    id: str
++    category: DiscrepancyCategory
++    severity: Severity
++    estimated_loss: Decimal
++    # Sourced from Transaction.external_reference via the discrepancy's
++    # match - null only if the linked transaction itself was somehow
++    # removed, which nothing in this codebase currently does.
++    order_reference: str | None
++    created_at: datetime
+diff --git a/apps/backend/src/modules/analysis_results/service.py b/apps/backend/src/modules/analysis_results/service.py
+new file mode 100644
+index 0000000..29993d2
+--- /dev/null
++++ b/apps/backend/src/modules/analysis_results/service.py
+@@ -0,0 +1,142 @@
++"""
++Core logic for the Analysis Results module.
++
++This module owns no tables of its own - it's a read model over five
++other modules' persisted output (Normalization's Transaction, Matching's
++ReconciliationMatch/MatchingRun, Discrepancies' Discrepancy, AI Insights'
++AIInsight), assembled for a frontend results page. Every pipeline module
++up to this point was write-once, read-never past its own synchronous
++response; this is the first module whose entire purpose is answering
++"what did the pipeline already decide", after the fact, same rationale
++Analysis Orchestration's own docstring gives for being the one other
++GET-shaped module in the build.
++
++Discrepancy and MatchingRun both follow the same "supersede on rerun"
++pattern noted in their own modules (discrepancies/service.py deletes and
++reinserts; matching rows are marked superseded_at rather than deleted) -
++so a plain analysis_id filter on Discrepancy is always "the current set",
++while *Run tables are queried by most-recent checked_at, since old run
++records themselves aren't deleted, just superseded by a newer row.
++"""
++
++from __future__ import annotations
++
++from collections import defaultdict
++from decimal import Decimal
++
++from sqlalchemy import select
++from sqlalchemy.orm import Session
++
++from modules.ai_insights.models import AIInsight
++from modules.analysis_orchestration.models import Analysis
++from modules.discrepancies.models import Discrepancy
++from modules.imports.models import SourceType
++from modules.matching.models import MatchingRun, ReconciliationMatch
++from modules.normalization.models import Transaction
++
++from .exceptions import AnalysisNotFoundError
++from .schemas import AnalysisSummaryResponse, DiscrepancyBreakdownItem, DiscrepancyDetailResponse
++
++
++class AnalysisResultsService:
++    def __init__(self, *, db: Session) -> None:
++        self._db = db
++
++    def get_summary(self, analysis_id: str) -> AnalysisSummaryResponse:
++        analysis = self._get_analysis_or_raise(analysis_id)
++
++        orders_processed = len(
++            self._db.execute(
++                select(Transaction.id).where(
++                    Transaction.analysis_id == analysis_id,
++                    Transaction.source_type == SourceType.POS_EXPORT,
++                )
++            ).scalars().all()
++        )
++
++        latest_matching_run = self._db.execute(
++            select(MatchingRun)
++            .where(MatchingRun.analysis_id == analysis_id)
++            .order_by(MatchingRun.checked_at.desc())
++            .limit(1)
++        ).scalar_one_or_none()
++
++        discrepancies = self._db.execute(
++            select(Discrepancy).where(Discrepancy.analysis_id == analysis_id)
++        ).scalars().all()
++        total_leakage = sum((d.estimated_loss for d in discrepancies), Decimal("0"))
++        breakdown = self._group_by_category(discrepancies)
++
++        latest_insight = self._db.execute(
++            select(AIInsight)
++            .where(AIInsight.analysis_id == analysis_id)
++            .order_by(AIInsight.generated_at.desc())
++            .limit(1)
++        ).scalar_one_or_none()
++
++        return AnalysisSummaryResponse(
++            analysis_id=analysis_id,
++            status=analysis.status,
++            orders_processed=orders_processed,
++            matched_count=latest_matching_run.matched_count if latest_matching_run else 0,
++            unmatched_pos_count=latest_matching_run.unmatched_pos_count if latest_matching_run else 0,
++            unmatched_platform_count=(
++                latest_matching_run.unmatched_platform_count if latest_matching_run else 0
++            ),
++            total_potential_revenue_leakage=total_leakage,
++            discrepancy_breakdown=breakdown,
++            ai_executive_summary=latest_insight.executive_summary if latest_insight else None,
++            ai_provider_name=latest_insight.provider_name if latest_insight else None,
++        )
++
++    def list_discrepancies(self, analysis_id: str) -> list[DiscrepancyDetailResponse]:
++        self._get_analysis_or_raise(analysis_id)
++
++        discrepancies = self._db.execute(
++            select(Discrepancy).where(Discrepancy.analysis_id == analysis_id)
++        ).scalars().all()
++
++        return [
++            DiscrepancyDetailResponse(
++                id=d.id,
++                category=d.category,
++                severity=d.severity,
++                estimated_loss=d.estimated_loss,
++                order_reference=self._order_reference_for(d),
++                created_at=d.created_at,
++            )
++            for d in discrepancies
++        ]
++
++    # -- internal steps ---------------------------------------------------
++
++    def _order_reference_for(self, discrepancy: Discrepancy) -> str | None:
++        match = self._db.get(ReconciliationMatch, discrepancy.reconciliation_match_id)
++        if match is None:
++            return None
++        # Prefer the POS side when both are populated (a fully-matched
++        # pair) - either side carries the same external_reference in
++        # that case, since matching a pair in the first place depends on
++        # the two sides agreeing on it.
++        transaction_id = match.pos_transaction_id or match.platform_transaction_id
++        if transaction_id is None:
++            return None
++        transaction = self._db.get(Transaction, transaction_id)
++        return transaction.external_reference if transaction else None
++
++    def _group_by_category(self, discrepancies: list[Discrepancy]) -> list[DiscrepancyBreakdownItem]:
++        counts: dict = defaultdict(int)
++        totals: dict = defaultdict(lambda: Decimal("0"))
++        for d in discrepancies:
++            counts[d.category] += 1
++            totals[d.category] += d.estimated_loss
++        return [
++            DiscrepancyBreakdownItem(category=category, count=counts[category], total_amount=totals[category])
++            for category in counts
++        ]
++
++    def _get_analysis_or_raise(self, analysis_id: str) -> Analysis:
++        analysis = self._db.get(Analysis, analysis_id)
++        if analysis is None:
++            raise AnalysisNotFoundError("We couldn't find that analysis.")
++        return analysis
+diff --git a/tests/backend/modules/analysis_results/__init__.py b/tests/backend/modules/analysis_results/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/tests/backend/modules/analysis_results/test_service.py b/tests/backend/modules/analysis_results/test_service.py
+new file mode 100644
+index 0000000..ab5ea06
+--- /dev/null
++++ b/tests/backend/modules/analysis_results/test_service.py
+@@ -0,0 +1,202 @@
++"""
++Unit tests for AnalysisResultsService.
++
++Seeds Transaction, ReconciliationMatch, MatchingRun, Discrepancy, and
++AIInsight rows directly, same testing-boundary rationale as Discrepancy
++Detection's own tests: this module's contract is against those five
++already-persisted shapes, not against the full upstream pipeline.
++"""
++
++from __future__ import annotations
++
++from datetime import date, datetime
++from datetime import timezone as dt_timezone
++from decimal import Decimal
++
++import pytest
++from sqlalchemy import create_engine
++from sqlalchemy.orm import Session
++
++from modules.ai_insights.models import AIInsight
++from modules.analysis_orchestration.models import Analysis, AnalysisStatus
++from modules.analysis_results.exceptions import AnalysisNotFoundError
++from modules.analysis_results.service import AnalysisResultsService
++from modules.discrepancies.models import Discrepancy, DiscrepancyCategory, Severity
++from modules.identity_access.models import Base, User  # noqa: F401 - registers "users"
++from modules.imports.models import SourceType, UploadedFile  # noqa: F401 - registers "uploaded_files"
++from modules.matching.models import MatchingRun, MatchingStatus, ReconciliationMatch
++from modules.normalization.models import Transaction
++from modules.organizations.models import Branch  # noqa: F401 - registers "branches"
++
++ANALYSIS_ID = "analysis-1"
++BRANCH_ID = "branch-1"
++USER_ID = "user-1"
++
++
++@pytest.fixture()
++def db(tmp_path):
++    engine = create_engine(f"sqlite:///{tmp_path}/test.db")
++    Base.metadata.create_all(engine)
++    with Session(engine) as session:
++        yield session
++
++
++@pytest.fixture()
++def service(db):
++    return AnalysisResultsService(db=db)
++
++
++def _seed_analysis(db: Session, *, status: AnalysisStatus = AnalysisStatus.COMPLETED) -> None:
++    db.add(
++        Analysis(
++            id=ANALYSIS_ID, branch_id=BRANCH_ID, created_by=USER_ID, version=1, status=status,
++            period_start=date(2026, 7, 15), period_end=date(2026, 7, 18),
++        )
++    )
++    db.commit()
++
++
++def _make_txn(db: Session, *, source_type: SourceType, amount: Decimal, external_reference: str) -> Transaction:
++    txn = Transaction(
++        analysis_id=ANALYSIS_ID, uploaded_file_id=f"uploaded-file-{source_type.value}",
++        source_type=source_type, external_reference=external_reference,
++        occurred_at=datetime(2026, 7, 15, 10, 0, 0, tzinfo=dt_timezone.utc),
++        amount=amount, currency_code="SAR",
++    )
++    db.add(txn)
++    db.commit()
++    db.refresh(txn)
++    return txn
++
++
++class TestGetSummary:
++    def test_raises_when_analysis_does_not_exist(self, service):
++        with pytest.raises(AnalysisNotFoundError):
++            service.get_summary("no-such-analysis")
++
++    def test_returns_zeroed_defaults_before_pipeline_has_run(self, db, service):
++        _seed_analysis(db, status=AnalysisStatus.AWAITING_FILES)
++
++        summary = service.get_summary(ANALYSIS_ID)
++
++        assert summary.status == AnalysisStatus.AWAITING_FILES
++        assert summary.orders_processed == 0
++        assert summary.matched_count == 0
++        assert summary.unmatched_pos_count == 0
++        assert summary.unmatched_platform_count == 0
++        assert summary.total_potential_revenue_leakage == Decimal("0")
++        assert summary.discrepancy_breakdown == []
++        assert summary.ai_executive_summary is None
++        assert summary.ai_provider_name is None
++
++    def test_aggregates_a_completed_analysis_correctly(self, db, service):
++        _seed_analysis(db)
++
++        # 5 POS orders is "orders processed", regardless of how many
++        # platform-side rows exist.
++        for i in range(5):
++            _make_txn(
++                db, source_type=SourceType.POS_EXPORT, amount=Decimal("100.00"),
++                external_reference=f"ORD-100{i}",
++            )
++        _make_txn(
++            db, source_type=SourceType.PLATFORM_SETTLEMENT, amount=Decimal("55.00"),
++            external_reference="ORD-1006",
++        )
++
++        db.add(
++            MatchingRun(
++                analysis_id=ANALYSIS_ID, status=MatchingStatus.COMPLETED,
++                matched_count=4, unmatched_pos_count=1, unmatched_platform_count=1,
++            )
++        )
++        db.add(
++            Discrepancy(
++                id="disc-1", analysis_id=ANALYSIS_ID, reconciliation_match_id="match-missing",
++                category=DiscrepancyCategory.MISSING_SETTLEMENT, severity=Severity.MEDIUM,
++                estimated_loss=Decimal("60.25"),
++            )
++        )
++        db.add(
++            Discrepancy(
++                id="disc-2", analysis_id=ANALYSIS_ID, reconciliation_match_id="match-unexpected",
++                category=DiscrepancyCategory.UNEXPECTED_SETTLEMENT, severity=Severity.MEDIUM,
++                estimated_loss=Decimal("55.00"),
++            )
++        )
++        db.add(
++            AIInsight(
++                analysis_id=ANALYSIS_ID, executive_summary="Two discrepancies found.",
++                provider_name="fake",
++            )
++        )
++        db.commit()
++
++        summary = service.get_summary(ANALYSIS_ID)
++
++        assert summary.status == AnalysisStatus.COMPLETED
++        assert summary.orders_processed == 5  # POS-side only, not +1 for the platform row
++        assert summary.matched_count == 4
++        assert summary.unmatched_pos_count == 1
++        assert summary.unmatched_platform_count == 1
++        assert summary.total_potential_revenue_leakage == Decimal("115.25")
++        breakdown = {b.category: (b.count, b.total_amount) for b in summary.discrepancy_breakdown}
++        assert breakdown[DiscrepancyCategory.MISSING_SETTLEMENT] == (1, Decimal("60.25"))
++        assert breakdown[DiscrepancyCategory.UNEXPECTED_SETTLEMENT] == (1, Decimal("55.00"))
++        assert summary.ai_executive_summary == "Two discrepancies found."
++        assert summary.ai_provider_name == "fake"
++
++    def test_uses_the_most_recent_matching_run_when_more_than_one_exists(self, db, service):
++        _seed_analysis(db)
++        db.add(MatchingRun(analysis_id=ANALYSIS_ID, status=MatchingStatus.COMPLETED, matched_count=1))
++        db.commit()
++        db.add(MatchingRun(analysis_id=ANALYSIS_ID, status=MatchingStatus.COMPLETED, matched_count=9))
++        db.commit()
++
++        summary = service.get_summary(ANALYSIS_ID)
++
++        assert summary.matched_count == 9
++
++
++class TestListDiscrepancies:
++    def test_raises_when_analysis_does_not_exist(self, service):
++        with pytest.raises(AnalysisNotFoundError):
++            service.list_discrepancies("no-such-analysis")
++
++    def test_resolves_order_reference_through_the_match(self, db, service):
++        _seed_analysis(db)
++        pos_txn = _make_txn(
++            db, source_type=SourceType.POS_EXPORT, amount=Decimal("60.25"), external_reference="ORD-1005"
++        )
++        db.add(
++            ReconciliationMatch(id="match-1", analysis_id=ANALYSIS_ID, pos_transaction_id=pos_txn.id)
++        )
++        db.add(
++            Discrepancy(
++                id="disc-1", analysis_id=ANALYSIS_ID, reconciliation_match_id="match-1",
++                category=DiscrepancyCategory.MISSING_SETTLEMENT, severity=Severity.MEDIUM,
++                estimated_loss=Decimal("60.25"),
++            )
++        )
++        db.commit()
++
++        results = service.list_discrepancies(ANALYSIS_ID)
++
++        assert len(results) == 1
++        assert results[0].order_reference == "ORD-1005"
++        assert results[0].category == DiscrepancyCategory.MISSING_SETTLEMENT
++
++    def test_order_reference_is_none_when_the_match_cannot_be_found(self, db, service):
++        _seed_analysis(db)
++        db.add(
++            Discrepancy(
++                id="disc-1", analysis_id=ANALYSIS_ID, reconciliation_match_id="does-not-exist",
++                category=DiscrepancyCategory.MISSING_SETTLEMENT, severity=Severity.LOW,
++                estimated_loss=Decimal("10.00"),
++            )
++        )
++        db.commit()
++
++        results = service.list_discrepancies(ANALYSIS_ID)
++
++        assert results[0].order_reference is None

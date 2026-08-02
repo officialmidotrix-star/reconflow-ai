@@ -35,6 +35,7 @@ from .database import get_db
 # every table on Base.metadata) and its service/exceptions/dependencies.
 from modules.ai_insights import router as ai_insights_router
 from modules.analysis_orchestration import router as analysis_orchestration_router
+from modules.analysis_results import router as analysis_results_router
 from modules.audit_logging import router as audit_logging_router
 from modules.deployment import router as deployment_router
 from modules.discrepancies import router as discrepancies_router
@@ -55,6 +56,7 @@ from modules.ai_insights.dependencies import FakeAIProvider
 from modules.ai_insights.providers.anthropic_provider import AnthropicAIProvider
 from modules.ai_insights.service import AIInsightService
 from modules.analysis_orchestration.service import AnalysisOrchestrationService
+from modules.analysis_results.service import AnalysisResultsService
 from modules.audit_logging.service import AuditLogService
 from modules.deployment.service import DeploymentService
 from modules.discrepancies.service import DiscrepancyService
@@ -205,6 +207,10 @@ def _orchestration_service(db: Session = Depends(get_db)) -> AnalysisOrchestrati
     return AnalysisOrchestrationService(db=db, audit_logger=_audit_logger(db))
 
 
+def _analysis_results_service(db: Session = Depends(get_db)) -> AnalysisResultsService:
+    return AnalysisResultsService(db=db)
+
+
 def _report_service(db: Session = Depends(get_db)) -> ReportService:
     return ReportService(db=db, storage=_storage, audit_logger=_audit_logger(db))
 
@@ -250,6 +256,7 @@ _ALL_ROUTERS = [
     manual_review_router,
     ai_insights_router,
     analysis_orchestration_router,
+    analysis_results_router,
     reporting_router,
     notification_router,
 ]
@@ -260,7 +267,7 @@ _ALL_ROUTERS = [
 _USER_ID_AUTH_MODULES = [
     validation_router, normalization_router, matching_router, financial_comparison_router,
     discrepancies_router, manual_review_router, ai_insights_router,
-    analysis_orchestration_router, reporting_router, notification_router,
+    analysis_orchestration_router, analysis_results_router, reporting_router, notification_router,
     organizations_router, reference_contracts_router, audit_logging_router, deployment_router,
 ]
 
@@ -274,6 +281,7 @@ _SERVICE_OVERRIDES = {
     manual_review_router.get_manual_review_service: _manual_review_service,
     ai_insights_router.get_ai_insight_service: _ai_insight_service,
     analysis_orchestration_router.get_orchestration_service: _orchestration_service,
+    analysis_results_router.get_results_service: _analysis_results_service,
     reporting_router.get_report_service: _report_service,
     notification_router.get_notification_service: _notification_service,
     identity_access_router.get_identity_access_service: _identity_access_service,
