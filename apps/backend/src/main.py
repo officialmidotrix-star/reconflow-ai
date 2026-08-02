@@ -46,6 +46,7 @@ app.add_middleware(
 )
 
 register_all(app)
+from bootstrap.seed import run_owner_seed as _run_owner_seed _run_owner_seed()
 
 
 @app.get("/health", tags=["health"])
