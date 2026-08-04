@@ -33,6 +33,7 @@ from modules.discrepancies.models import Discrepancy
 from modules.imports.models import SourceType
 from modules.matching.models import MatchingRun, ReconciliationMatch
 from modules.normalization.models import Transaction
+from modules.organizations.models import Branch, Organization
 
 from .exceptions import AnalysisNotFoundError
 from .schemas import AnalysisSummaryResponse, DiscrepancyBreakdownItem, DiscrepancyDetailResponse
@@ -77,6 +78,7 @@ class AnalysisResultsService:
         return AnalysisSummaryResponse(
             analysis_id=analysis_id,
             status=analysis.status,
+            currency=self._resolve_currency(analysis.branch_id),
             orders_processed=orders_processed,
             matched_count=latest_matching_run.matched_count if latest_matching_run else 0,
             unmatched_pos_count=latest_matching_run.unmatched_pos_count if latest_matching_run else 0,
@@ -109,6 +111,14 @@ class AnalysisResultsService:
         ]
 
     # -- internal steps ---------------------------------------------------
+
+    def _resolve_currency(self, branch_id: str) -> str:
+        branch = self._db.get(Branch, branch_id)
+        if branch is None:
+            return "USD"  # Shouldn't happen - branch_id is a required FK on Analysis -
+            # but a currency label beats a 500 if data's ever inconsistent.
+        organization = self._db.get(Organization, branch.organization_id)
+        return organization.default_currency if organization else "USD"
 
     def _order_reference_for(self, discrepancy: Discrepancy) -> str | None:
         match = self._db.get(ReconciliationMatch, discrepancy.reconciliation_match_id)

@@ -32,6 +32,11 @@ class DiscrepancyBreakdownItem(BaseModel):
 class AnalysisSummaryResponse(BaseModel):
     analysis_id: str
     status: AnalysisStatus
+    # Sourced from the branch's organization at request time, not stored
+    # on Analysis itself - added after the fact, noticed while building
+    # the results page that a revenue-leakage figure with no currency
+    # attached isn't something a restaurant owner should be asked to trust.
+    currency: str
 
     orders_processed: int
     matched_count: int

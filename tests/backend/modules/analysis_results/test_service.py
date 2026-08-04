@@ -26,10 +26,11 @@ from modules.identity_access.models import Base, User  # noqa: F401 - registers 
 from modules.imports.models import SourceType, UploadedFile  # noqa: F401 - registers "uploaded_files"
 from modules.matching.models import MatchingRun, MatchingStatus, ReconciliationMatch
 from modules.normalization.models import Transaction
-from modules.organizations.models import Branch  # noqa: F401 - registers "branches"
+from modules.organizations.models import Branch, Organization
 
 ANALYSIS_ID = "analysis-1"
 BRANCH_ID = "branch-1"
+ORG_ID = "org-1"
 USER_ID = "user-1"
 
 
@@ -38,6 +39,9 @@ def db(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path}/test.db")
     Base.metadata.create_all(engine)
     with Session(engine) as session:
+        session.add(Organization(id=ORG_ID, legal_name="Test Restaurant Group", default_currency="SAR"))
+        session.add(Branch(id=BRANCH_ID, organization_id=ORG_ID, name="Test Branch", timezone="Asia/Riyadh"))
+        session.commit()
         yield session
 
 
@@ -80,6 +84,7 @@ class TestGetSummary:
         summary = service.get_summary(ANALYSIS_ID)
 
         assert summary.status == AnalysisStatus.AWAITING_FILES
+        assert summary.currency == "SAR"
         assert summary.orders_processed == 0
         assert summary.matched_count == 0
         assert summary.unmatched_pos_count == 0
@@ -135,6 +140,7 @@ class TestGetSummary:
         summary = service.get_summary(ANALYSIS_ID)
 
         assert summary.status == AnalysisStatus.COMPLETED
+        assert summary.currency == "SAR"
         assert summary.orders_processed == 5  # POS-side only, not +1 for the platform row
         assert summary.matched_count == 4
         assert summary.unmatched_pos_count == 1
