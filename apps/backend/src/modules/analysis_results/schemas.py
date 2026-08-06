@@ -46,6 +46,14 @@ class AnalysisSummaryResponse(BaseModel):
     total_potential_revenue_leakage: Decimal
     discrepancy_breakdown: list[DiscrepancyBreakdownItem]
 
+    # None for analyses run before lead capture existed, or if the lead
+    # call failed after upload for some reason - a results page can still
+    # render the whole report without these, just without a name to put
+    # on the dispute report in place of the raw branch_id.
+    restaurant_name: str | None
+    contact_email: str | None
+    whatsapp_number: str | None
+
     # None until AI Insights has actually run for this analysis - a
     # results page should treat that as "not generated yet", not as an
     # error, since it's a legitimate pipeline state (e.g. AWAITING_FILES

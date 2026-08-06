@@ -31,6 +31,7 @@ from modules.ai_insights.models import AIInsight
 from modules.analysis_orchestration.models import Analysis
 from modules.discrepancies.models import Discrepancy
 from modules.imports.models import SourceType
+from modules.lead_capture.models import AnalysisLead
 from modules.matching.models import MatchingRun, ReconciliationMatch
 from modules.normalization.models import Transaction
 from modules.organizations.models import Branch, Organization
@@ -75,10 +76,17 @@ class AnalysisResultsService:
             .limit(1)
         ).scalar_one_or_none()
 
+        lead = self._db.execute(
+            select(AnalysisLead).where(AnalysisLead.analysis_id == analysis_id)
+        ).scalar_one_or_none()
+
         return AnalysisSummaryResponse(
             analysis_id=analysis_id,
             status=analysis.status,
             currency=self._resolve_currency(analysis.branch_id),
+            restaurant_name=lead.restaurant_name if lead else None,
+            contact_email=lead.contact_email if lead else None,
+            whatsapp_number=lead.whatsapp_number if lead else None,
             orders_processed=orders_processed,
             matched_count=latest_matching_run.matched_count if latest_matching_run else 0,
             unmatched_pos_count=latest_matching_run.unmatched_pos_count if latest_matching_run else 0,

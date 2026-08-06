@@ -42,6 +42,7 @@ from modules.discrepancies import router as discrepancies_router
 from modules.financial_comparison import router as financial_comparison_router
 from modules.identity_access import router as identity_access_router
 from modules.imports import router as imports_router
+from modules.lead_capture import router as lead_capture_router
 from modules.manual_review import router as manual_review_router
 from modules.matching import router as matching_router
 from modules.normalization import router as normalization_router
@@ -66,6 +67,7 @@ from modules.identity_access.service import IdentityAccessService
 from modules.imports.dependencies import AuthContext
 from modules.imports.security import NoOpMalwareScanner
 from modules.imports.service import ImportService
+from modules.lead_capture.service import LeadCaptureService
 from modules.manual_review.service import ManualReviewService
 from modules.matching.service import MatchingService
 from modules.normalization.service import NormalizationService
@@ -211,6 +213,10 @@ def _analysis_results_service(db: Session = Depends(get_db)) -> AnalysisResultsS
     return AnalysisResultsService(db=db)
 
 
+def _lead_capture_service(db: Session = Depends(get_db)) -> LeadCaptureService:
+    return LeadCaptureService(db=db)
+
+
 def _report_service(db: Session = Depends(get_db)) -> ReportService:
     return ReportService(db=db, storage=_storage, audit_logger=_audit_logger(db))
 
@@ -257,6 +263,7 @@ _ALL_ROUTERS = [
     ai_insights_router,
     analysis_orchestration_router,
     analysis_results_router,
+    lead_capture_router,
     reporting_router,
     notification_router,
 ]
@@ -267,7 +274,7 @@ _ALL_ROUTERS = [
 _USER_ID_AUTH_MODULES = [
     validation_router, normalization_router, matching_router, financial_comparison_router,
     discrepancies_router, manual_review_router, ai_insights_router,
-    analysis_orchestration_router, analysis_results_router, reporting_router, notification_router,
+    analysis_orchestration_router, analysis_results_router, lead_capture_router, reporting_router, notification_router,
     organizations_router, reference_contracts_router, audit_logging_router, deployment_router,
 ]
 
@@ -282,6 +289,7 @@ _SERVICE_OVERRIDES = {
     ai_insights_router.get_ai_insight_service: _ai_insight_service,
     analysis_orchestration_router.get_orchestration_service: _orchestration_service,
     analysis_results_router.get_results_service: _analysis_results_service,
+    lead_capture_router.get_lead_capture_service: _lead_capture_service,
     reporting_router.get_report_service: _report_service,
     notification_router.get_notification_service: _notification_service,
     identity_access_router.get_identity_access_service: _identity_access_service,

@@ -24,6 +24,7 @@ from modules.analysis_results.service import AnalysisResultsService
 from modules.discrepancies.models import Discrepancy, DiscrepancyCategory, Severity
 from modules.identity_access.models import Base, User  # noqa: F401 - registers "users"
 from modules.imports.models import SourceType, UploadedFile  # noqa: F401 - registers "uploaded_files"
+from modules.lead_capture.models import AnalysisLead
 from modules.matching.models import MatchingRun, MatchingStatus, ReconciliationMatch
 from modules.normalization.models import Transaction
 from modules.organizations.models import Branch, Organization
@@ -93,6 +94,9 @@ class TestGetSummary:
         assert summary.discrepancy_breakdown == []
         assert summary.ai_executive_summary is None
         assert summary.ai_provider_name is None
+        assert summary.restaurant_name is None
+        assert summary.contact_email is None
+        assert summary.whatsapp_number is None
 
     def test_aggregates_a_completed_analysis_correctly(self, db, service):
         _seed_analysis(db)
@@ -162,6 +166,24 @@ class TestGetSummary:
         summary = service.get_summary(ANALYSIS_ID)
 
         assert summary.matched_count == 9
+
+
+class TestLeadInfoOnSummary:
+    def test_surfaces_lead_info_when_present(self, db, service):
+        _seed_analysis(db)
+        db.add(
+            AnalysisLead(
+                analysis_id=ANALYSIS_ID, restaurant_name="Downtown Grill",
+                contact_email="owner@downtowngrill.example", whatsapp_number="+966501234567",
+            )
+        )
+        db.commit()
+
+        summary = service.get_summary(ANALYSIS_ID)
+
+        assert summary.restaurant_name == "Downtown Grill"
+        assert summary.contact_email == "owner@downtowngrill.example"
+        assert summary.whatsapp_number == "+966501234567"
 
 
 class TestListDiscrepancies:
