@@ -61,17 +61,65 @@ def _seed_analysis(db: Session, *, status: AnalysisStatus = AnalysisStatus.COMPL
     db.commit()
 
 
-def _make_txn(db: Session, *, source_type: SourceType, amount: Decimal, external_reference: str) -> Transaction:
+def _make_txn(
+    db: Session, *, source_type: SourceType, amount: Decimal, external_reference: str,
+    currency_code: str = "SAR",
+) -> Transaction:
     txn = Transaction(
         analysis_id=ANALYSIS_ID, uploaded_file_id=f"uploaded-file-{source_type.value}",
         source_type=source_type, external_reference=external_reference,
         occurred_at=datetime(2026, 7, 15, 10, 0, 0, tzinfo=dt_timezone.utc),
-        amount=amount, currency_code="SAR",
+        amount=amount, currency_code=currency_code,
     )
     db.add(txn)
     db.commit()
     db.refresh(txn)
     return txn
+
+
+class TestCurrencyResolution:
+    def test_reads_currency_from_actual_transactions_not_just_branch_default(self, db, service):
+        # Org default is SAR (see _seed_analysis / Organization fixture),
+        # but the file specified USD for this row - summary should
+        # reflect what the data actually says, not the independent
+        # branch/org lookup that used to be the only source.
+        _seed_analysis(db)
+        _make_txn(
+            db, source_type=SourceType.POS_EXPORT, amount=Decimal("100.00"),
+            external_reference="ORD-1", currency_code="USD",
+        )
+
+        summary = service.get_summary(ANALYSIS_ID)
+
+        assert summary.currency == "USD"
+        assert summary.has_mixed_currencies is False
+
+    def test_falls_back_to_branch_org_default_before_pipeline_has_run(self, db, service):
+        # No transactions exist yet - nothing to read currency from, so
+        # this falls back to the branch/org default rather than showing
+        # nothing on a page that hasn't processed anything yet.
+        _seed_analysis(db, status=AnalysisStatus.AWAITING_FILES)
+
+        summary = service.get_summary(ANALYSIS_ID)
+
+        assert summary.currency == "SAR"  # the org default from the fixture
+        assert summary.has_mixed_currencies is False
+
+    def test_detects_genuinely_mixed_currencies(self, db, service):
+        _seed_analysis(db)
+        _make_txn(
+            db, source_type=SourceType.POS_EXPORT, amount=Decimal("100.00"),
+            external_reference="ORD-1", currency_code="SAR",
+        )
+        _make_txn(
+            db, source_type=SourceType.PLATFORM_SETTLEMENT, amount=Decimal("50.00"),
+            external_reference="ORD-2", currency_code="USD",
+        )
+
+        summary = service.get_summary(ANALYSIS_ID)
+
+        assert summary.has_mixed_currencies is True
+        assert summary.currency in ("SAR", "USD")  # a real value, not fabricated - which one is secondary
 
 
 class TestGetSummary:

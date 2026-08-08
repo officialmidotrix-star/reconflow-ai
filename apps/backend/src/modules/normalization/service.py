@@ -64,6 +64,7 @@ REFERENCE_FIELD = "order_id"
 # file content, with no per-source-type lookup needed the way
 # COMMISSION_FIELD_BY_SOURCE needs one.
 ORDER_STATUS_FIELD = "order_status"
+CURRENCY_FIELD = "currency"
 
 
 class NormalizationService:
@@ -121,7 +122,7 @@ class NormalizationService:
                 commission_field=commission_field,
                 tzinfo=tzinfo,
                 uploaded_file=uploaded_file,
-                currency=currency,
+                default_currency=currency,
                 transactions=transactions,
                 warnings=warnings,
                 order_statuses=order_statuses,
@@ -195,13 +196,14 @@ class NormalizationService:
         commission_field: str | None,
         tzinfo: ZoneInfo,
         uploaded_file: UploadedFile,
-        currency: str,
+        default_currency: str,
         transactions: list[Transaction],
         warnings: list[tuple[int | None, str | None, str]],
         order_statuses: list[tuple[str, str]],
     ) -> None:
         seen_references: dict[str, int] = {}
         order_status_idx = positions.get(ORDER_STATUS_FIELD)
+        currency_idx = positions.get(CURRENCY_FIELD)
         try:
             for row_number, row in enumerate(rows_iter, start=2):  # header was row 1
                 reference = self._cell(row, positions[reference_field]).strip()
@@ -228,6 +230,18 @@ class NormalizationService:
                     platform_commission_amount = commission.quantize(
                         Decimal("0.01"), rounding=ROUND_HALF_UP
                     )
+
+                # File-specified currency wins when this row has one;
+                # falls back to the branch/org default otherwise. Each
+                # row decides independently - a file could plausibly
+                # specify some rows and not others, and there's no
+                # reason to force the same fallback onto a row that did
+                # provide its own value.
+                row_currency = default_currency
+                if currency_idx is not None:
+                    raw_currency = self._cell(row, currency_idx).strip()
+                    if raw_currency:
+                        row_currency = raw_currency.upper()
 
                 occurred_at = naive_dt.replace(tzinfo=tzinfo).astimezone(timezone.utc)
                 quantized_amount = amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -259,7 +273,7 @@ class NormalizationService:
                         external_reference=reference,
                         occurred_at=occurred_at,
                         amount=quantized_amount,
-                        currency_code=currency,
+                        currency_code=row_currency,
                         platform_commission_amount=platform_commission_amount,
                     )
                 )

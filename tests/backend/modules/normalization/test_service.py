@@ -212,6 +212,71 @@ class TestOrderStatusPersistence:
         assert len(txns) == 1
 
 
+class TestPerRowCurrency:
+    def test_file_specified_currency_overrides_the_org_default(
+        self, service, db, storage, validation_service
+    ):
+        # Branch/org default is SAR (see CURRENCY constant), file says USD.
+        content = b"order_id,order_time,amount,currency\n1001,2026-01-15 10:00:00,42.50,USD\n"
+        uploaded = _upload_and_validate(
+            db, storage, validation_service, content=content, filename="pos.csv",
+            source_type=SourceType.POS_EXPORT,
+        )
+        service.normalize_file(uploaded_file_id=uploaded.id, requested_by=USER_ID)
+
+        txn = db.execute(select(Transaction).where(Transaction.uploaded_file_id == uploaded.id)).scalar_one()
+        assert txn.currency_code == "USD"
+
+    def test_falls_back_to_org_default_when_column_absent(
+        self, service, db, storage, validation_service
+    ):
+        content = b"order_id,order_time,amount\n1001,2026-01-15 10:00:00,42.50\n"
+        uploaded = _upload_and_validate(
+            db, storage, validation_service, content=content, filename="pos.csv",
+            source_type=SourceType.POS_EXPORT,
+        )
+        service.normalize_file(uploaded_file_id=uploaded.id, requested_by=USER_ID)
+
+        txn = db.execute(select(Transaction).where(Transaction.uploaded_file_id == uploaded.id)).scalar_one()
+        assert txn.currency_code == CURRENCY  # the org default, unchanged from before this feature
+
+    def test_falls_back_to_org_default_when_value_present_but_empty_for_that_row(
+        self, service, db, storage, validation_service
+    ):
+        content = (
+            b"order_id,order_time,amount,currency\n"
+            b"1001,2026-01-15 10:00:00,42.50,USD\n"
+            b"1002,2026-01-15 11:00:00,18.00,\n"  # column present, blank for this specific row
+        )
+        uploaded = _upload_and_validate(
+            db, storage, validation_service, content=content, filename="pos.csv",
+            source_type=SourceType.POS_EXPORT,
+        )
+        service.normalize_file(uploaded_file_id=uploaded.id, requested_by=USER_ID)
+
+        txns = {
+            t.external_reference: t.currency_code
+            for t in db.execute(
+                select(Transaction).where(Transaction.uploaded_file_id == uploaded.id)
+            ).scalars().all()
+        }
+        assert txns["1001"] == "USD"
+        assert txns["1002"] == CURRENCY  # blank on this row -> falls back independently
+
+    def test_lowercase_currency_in_file_is_normalized_to_uppercase(
+        self, service, db, storage, validation_service
+    ):
+        content = b"order_id,order_time,amount,currency\n1001,2026-01-15 10:00:00,42.50,usd\n"
+        uploaded = _upload_and_validate(
+            db, storage, validation_service, content=content, filename="pos.csv",
+            source_type=SourceType.POS_EXPORT,
+        )
+        service.normalize_file(uploaded_file_id=uploaded.id, requested_by=USER_ID)
+
+        txn = db.execute(select(Transaction).where(Transaction.uploaded_file_id == uploaded.id)).scalar_one()
+        assert txn.currency_code == "USD"
+
+
 class TestPlatformSettlementNormalization:
     def test_uses_gross_amount_as_transaction_amount(self, service, db, storage, validation_service):
         content = (

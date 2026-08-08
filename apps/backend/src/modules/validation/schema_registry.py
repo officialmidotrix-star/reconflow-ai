@@ -82,6 +82,17 @@ def is_valid_date(value: str) -> bool:
     return parse_date(value) is not None
 
 
+def is_valid_currency_code(value: str) -> bool:
+    """Empty is valid here (optional column, absent-for-this-row is not
+    an error) - only checks shape (3 letters) when a value is actually
+    present, not against a fixed list of known codes. A real but
+    less-common code shouldn't fail validation just because it wasn't
+    anticipated."""
+    if not is_non_empty(value):
+        return True
+    return value.strip().isalpha() and len(value.strip()) == 3
+
+
 @dataclass(frozen=True)
 class ColumnSpec:
     field_name: str
@@ -141,6 +152,13 @@ SOURCE_TYPE_SCHEMAS: dict[SourceType, tuple[ColumnSpec, ...]] = {
             issue_code=IssueCode.INVALID_STATUS_VALUE,
             is_required=False,
         ),
+        ColumnSpec(
+            field_name="currency",
+            accepted_headers=("currency", "currency_code", "currency code"),
+            validator=is_valid_currency_code,
+            issue_code=IssueCode.INVALID_CURRENCY_VALUE,
+            is_required=False,
+        ),
     ),
     SourceType.PLATFORM_SETTLEMENT: (
         ColumnSpec(
@@ -166,6 +184,13 @@ SOURCE_TYPE_SCHEMAS: dict[SourceType, tuple[ColumnSpec, ...]] = {
             accepted_headers=("commission_amount", "commission", "platform fee", "fee"),
             validator=is_valid_decimal,
             issue_code=IssueCode.INVALID_NUMBER,
+        ),
+        ColumnSpec(
+            field_name="currency",
+            accepted_headers=("currency", "currency_code", "currency code"),
+            validator=is_valid_currency_code,
+            issue_code=IssueCode.INVALID_CURRENCY_VALUE,
+            is_required=False,
         ),
     ),
 }

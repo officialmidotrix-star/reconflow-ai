@@ -37,6 +37,13 @@ class AnalysisSummaryResponse(BaseModel):
     # the results page that a revenue-leakage figure with no currency
     # attached isn't something a restaurant owner should be asked to trust.
     currency: str
+    # True when this analysis's transactions genuinely span more than one
+    # currency (per-row currency now flows from the uploaded file when
+    # present) - the frontend surfaces this as a small caveat rather than
+    # silently summing amounts across currencies into one misleading
+    # total. Detecting and disclosing this is in scope; actually
+    # converting between currencies to make the total correct is not.
+    has_mixed_currencies: bool
 
     orders_processed: int
     matched_count: int

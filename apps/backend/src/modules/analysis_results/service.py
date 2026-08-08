@@ -80,10 +80,13 @@ class AnalysisResultsService:
             select(AnalysisLead).where(AnalysisLead.analysis_id == analysis_id)
         ).scalar_one_or_none()
 
+        currency, has_mixed_currencies = self._resolve_currency(analysis_id, analysis.branch_id)
+
         return AnalysisSummaryResponse(
             analysis_id=analysis_id,
             status=analysis.status,
-            currency=self._resolve_currency(analysis.branch_id),
+            currency=currency,
+            has_mixed_currencies=has_mixed_currencies,
             restaurant_name=lead.restaurant_name if lead else None,
             contact_email=lead.contact_email if lead else None,
             whatsapp_number=lead.whatsapp_number if lead else None,
@@ -120,7 +123,34 @@ class AnalysisResultsService:
 
     # -- internal steps ---------------------------------------------------
 
-    def _resolve_currency(self, branch_id: str) -> str:
+    def _resolve_currency(self, analysis_id: str, branch_id: str) -> tuple[str, bool]:
+        """Returns (currency, has_mixed_currencies).
+
+        Reads from what the transactions actually ended up with, not an
+        independent branch/org lookup - the two used to be able to
+        disagree (a file specifying its own currency wouldn't be
+        reflected here at all under the old lookup-only version), which
+        would show a headline total labeled with a currency the
+        underlying data didn't actually use. Branch/org is now only the
+        fallback for the pre-pipeline case, where there's nothing yet to
+        read from - matching exactly what Normalization itself falls
+        back to when a file doesn't specify its own currency, so this
+        stays consistent with what actually got stored rather than a
+        second, separately-resolved opinion.
+        """
+        distinct_currencies = self._db.execute(
+            select(Transaction.currency_code)
+            .where(Transaction.analysis_id == analysis_id)
+            .distinct()
+            .order_by(Transaction.currency_code)
+        ).scalars().all()
+
+        if not distinct_currencies:
+            return self._resolve_currency_from_branch(branch_id), False
+
+        return distinct_currencies[0], len(distinct_currencies) > 1
+
+    def _resolve_currency_from_branch(self, branch_id: str) -> str:
         branch = self._db.get(Branch, branch_id)
         if branch is None:
             return "USD"  # Shouldn't happen - branch_id is a required FK on Analysis -
