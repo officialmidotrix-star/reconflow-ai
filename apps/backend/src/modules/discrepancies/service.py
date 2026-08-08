@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from modules.financial_comparison.models import ComparisonResult
 from modules.matching.models import ReconciliationMatch
-from modules.normalization.models import Transaction
+from modules.normalization.models import Transaction, TransactionOrderStatus
 
 from .dependencies import AuditLogger
 from .exceptions import DiscrepancyPersistError
@@ -41,6 +41,20 @@ def severity_for(estimated_loss: Decimal) -> Severity:
     if estimated_loss >= _MEDIUM_THRESHOLD:
         return Severity.MEDIUM
     return Severity.LOW
+
+
+# Starting set, not a confirmed vocabulary - order_status is a free-text
+# optional column precisely because real POS export spellings haven't
+# been sampled yet (same caveat as the column's own definition in
+# validation/schema_registry.py). Matched case-insensitively, substring
+# rather than exact-equals, since real values are more likely to be
+# "Cancelled by customer" than a bare "CANCELLED".
+_CANCELLATION_INDICATORS = ("cancel", "refund", "void")
+
+
+def _indicates_cancellation(raw_status: str) -> bool:
+    normalized = raw_status.strip().lower()
+    return any(indicator in normalized for indicator in _CANCELLATION_INDICATORS)
 
 
 class DiscrepancyService:
@@ -83,11 +97,15 @@ class DiscrepancyService:
         for match in matches:
             if match.pos_transaction_id and not match.platform_transaction_id:
                 pos_txn = self._db.get(Transaction, match.pos_transaction_id)
-                found.append(
-                    self._make(
-                        analysis_id, match.id, DiscrepancyCategory.MISSING_SETTLEMENT, pos_txn.amount
+                category = DiscrepancyCategory.MISSING_SETTLEMENT
+                status = self._db.execute(
+                    select(TransactionOrderStatus).where(
+                        TransactionOrderStatus.transaction_id == pos_txn.id
                     )
-                )
+                ).scalar_one_or_none()
+                if status is not None and _indicates_cancellation(status.raw_status):
+                    category = DiscrepancyCategory.CANCELLED_AFTER_PREPARATION
+                found.append(self._make(analysis_id, match.id, category, pos_txn.amount))
             elif match.platform_transaction_id and not match.pos_transaction_id:
                 platform_txn = self._db.get(Transaction, match.platform_transaction_id)
                 found.append(

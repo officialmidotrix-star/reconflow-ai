@@ -135,7 +135,9 @@ class ValidationService:
         for col in schema:
             idx = next((i for i, h in enumerate(header) if col.matches_header(h)), None)
             if idx is None:
-                missing.append(col)
+                if col.is_required:
+                    missing.append(col)
+                # else: optional and absent - fine, just not in positions
             else:
                 positions[col.field_name] = idx
 
@@ -165,7 +167,9 @@ class ValidationService:
             for row_number, row in enumerate(rows_iter, start=2):  # header was row 1
                 row_count += 1
                 for col in schema:
-                    idx = column_positions[col.field_name]
+                    idx = column_positions.get(col.field_name)
+                    if idx is None:
+                        continue  # optional column, absent from this file
                     value = row[idx] if idx < len(row) else ""
                     if not col.validator(value):
                         if len(issues) < self._max_issues:

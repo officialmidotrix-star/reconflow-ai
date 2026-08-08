@@ -11,6 +11,7 @@ re-uploads.
 
 from __future__ import annotations
 
+import uuid
 from datetime import timezone
 from decimal import ROUND_HALF_UP, Decimal
 from zoneinfo import ZoneInfo
@@ -34,7 +35,7 @@ from .exceptions import (
     NormalizationPersistError,
     UploadedFileNotFoundError,
 )
-from .models import NormalizationRun, NormalizationStatus, NormalizationWarning, Transaction
+from .models import NormalizationRun, NormalizationStatus, NormalizationWarning, Transaction, TransactionOrderStatus
 
 DEFAULT_MAX_ROWS = 250_000  # same safety cap rationale as Data Validation
 
@@ -57,6 +58,12 @@ COMMISSION_FIELD_BY_SOURCE: dict[SourceType, str] = {
     SourceType.PLATFORM_SETTLEMENT: "commission_amount",
 }
 REFERENCE_FIELD = "order_id"
+# Present in positions only for POS_EXPORT files that actually had the
+# column - schema_for(PLATFORM_SETTLEMENT) has no order_status spec at
+# all, so positions.get() naturally returns None there regardless of
+# file content, with no per-source-type lookup needed the way
+# COMMISSION_FIELD_BY_SOURCE needs one.
+ORDER_STATUS_FIELD = "order_status"
 
 
 class NormalizationService:
@@ -99,6 +106,7 @@ class NormalizationService:
 
         transactions: list[Transaction] = []
         warnings: list[tuple[int | None, str | None, str]] = []
+        order_statuses: list[tuple[str, str]] = []
 
         rows_iter = parser.iter_rows(content, max_rows=self._max_rows)
         try:
@@ -116,11 +124,12 @@ class NormalizationService:
                 currency=currency,
                 transactions=transactions,
                 warnings=warnings,
+                order_statuses=order_statuses,
             )
         finally:
             rows_iter.close()
 
-        return self._persist(uploaded_file, transactions, warnings, requested_by)
+        return self._persist(uploaded_file, transactions, warnings, order_statuses, requested_by)
 
     # -- internal steps -------------------------------------------------
 
@@ -164,6 +173,8 @@ class NormalizationService:
         for col in schema:
             idx = next((i for i, h in enumerate(header) if col.matches_header(h)), None)
             if idx is None:
+                if not col.is_required:
+                    continue  # optional and absent - fine, no position to record
                 # Should not happen given PASSED validation - see docstring
                 # in exceptions.NormalizationInternalError.
                 raise NormalizationInternalError(
@@ -187,8 +198,10 @@ class NormalizationService:
         currency: str,
         transactions: list[Transaction],
         warnings: list[tuple[int | None, str | None, str]],
+        order_statuses: list[tuple[str, str]],
     ) -> None:
         seen_references: dict[str, int] = {}
+        order_status_idx = positions.get(ORDER_STATUS_FIELD)
         try:
             for row_number, row in enumerate(rows_iter, start=2):  # header was row 1
                 reference = self._cell(row, positions[reference_field]).strip()
@@ -231,8 +244,15 @@ class NormalizationService:
                 else:
                     seen_references[reference] = row_number
 
+                # Generated here rather than left to the column's default -
+                # order_statuses needs a real transaction_id to reference
+                # before this session flushes, and a Python-side
+                # mapped_column default isn't guaranteed to have run yet
+                # at this point (it's evaluated at flush/INSERT time).
+                transaction_id = str(uuid.uuid4())
                 transactions.append(
                     Transaction(
+                        id=transaction_id,
                         analysis_id=uploaded_file.analysis_id,
                         uploaded_file_id=uploaded_file.id,
                         source_type=uploaded_file.source_type,
@@ -243,6 +263,11 @@ class NormalizationService:
                         platform_commission_amount=platform_commission_amount,
                     )
                 )
+
+                if order_status_idx is not None:
+                    raw_status = self._cell(row, order_status_idx).strip()
+                    if raw_status:
+                        order_statuses.append((transaction_id, raw_status))
         except RowCapExceededError as exc:
             raise FileReadError(
                 f"The file exceeded {exc.max_rows:,} rows during normalization re-read."
@@ -257,13 +282,20 @@ class NormalizationService:
         uploaded_file: UploadedFile,
         transactions: list[Transaction],
         warnings: list[tuple[int | None, str | None, str]],
+        order_statuses: list[tuple[str, str]],
         requested_by: str,
     ) -> NormalizationRun:
         # Supersede: replace any transactions from a previous normalization
         # run of this same uploaded file, rather than duplicating them.
+        # transaction_order_statuses.transaction_id has ondelete=CASCADE,
+        # so the DB itself cleans up any orphaned status rows here - no
+        # separate delete needed, and this bulk Core delete wouldn't
+        # trigger ORM-level cascade even if the FK didn't have it set.
         self._db.execute(delete(Transaction).where(Transaction.uploaded_file_id == uploaded_file.id))
         for txn in transactions:
             self._db.add(txn)
+        for transaction_id, raw_status in order_statuses:
+            self._db.add(TransactionOrderStatus(transaction_id=transaction_id, raw_status=raw_status))
 
         run = NormalizationRun(
             uploaded_file_id=uploaded_file.id,

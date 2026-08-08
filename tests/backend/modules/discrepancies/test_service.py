@@ -23,7 +23,7 @@ from modules.discrepancies.service import DiscrepancyService, severity_for
 from modules.financial_comparison.models import ComparisonResult
 from modules.imports.models import Base, SourceType
 from modules.matching.models import ReconciliationMatch
-from modules.normalization.models import Transaction
+from modules.normalization.models import Transaction, TransactionOrderStatus
 
 ANALYSIS_ID = "analysis-1"
 USER_ID = "user-1"
@@ -165,6 +165,55 @@ class TestMissingSettlement:
         assert d.category == DiscrepancyCategory.MISSING_SETTLEMENT
         assert d.estimated_loss == Decimal("30.00")
         assert d.severity == Severity.LOW
+
+
+class TestCancelledAfterPreparation:
+    def test_reclassified_when_status_indicates_cancellation(self, service, db):
+        pos = _make_txn(db, source_type=SourceType.POS_EXPORT, amount=Decimal("30.00"))
+        db.add(TransactionOrderStatus(transaction_id=pos.id, raw_status="Cancelled by customer"))
+        db.commit()
+        _make_match(db, pos_transaction_id=pos.id, platform_transaction_id=None)
+
+        run = service.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+
+        assert run.total_count == 1
+        d = _discrepancies(db)[0]
+        assert d.category == DiscrepancyCategory.CANCELLED_AFTER_PREPARATION
+        assert d.estimated_loss == Decimal("30.00")  # still a real loss, same amount either way
+
+    @pytest.mark.parametrize("raw_status", ["CANCELLED", "Refunded", "voided by platform", "  cancel  "])
+    def test_recognizes_several_real_world_spellings(self, service, db, raw_status):
+        pos = _make_txn(db, source_type=SourceType.POS_EXPORT, amount=Decimal("30.00"))
+        db.add(TransactionOrderStatus(transaction_id=pos.id, raw_status=raw_status))
+        db.commit()
+        _make_match(db, pos_transaction_id=pos.id, platform_transaction_id=None)
+
+        service.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+
+        assert _discrepancies(db)[0].category == DiscrepancyCategory.CANCELLED_AFTER_PREPARATION
+
+    def test_unrecognized_status_value_stays_missing_settlement(self, service, db):
+        # A status column with a value that doesn't indicate cancellation
+        # (e.g. "PAID", "COMPLETED") shouldn't reclassify anything - only
+        # actual cancellation/refund indicators should.
+        pos = _make_txn(db, source_type=SourceType.POS_EXPORT, amount=Decimal("30.00"))
+        db.add(TransactionOrderStatus(transaction_id=pos.id, raw_status="COMPLETED"))
+        db.commit()
+        _make_match(db, pos_transaction_id=pos.id, platform_transaction_id=None)
+
+        service.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+
+        assert _discrepancies(db)[0].category == DiscrepancyCategory.MISSING_SETTLEMENT
+
+    def test_no_status_row_stays_missing_settlement(self, service, db):
+        # The default case (no order_status column in the uploaded file
+        # at all) - today's exact prior behavior, unchanged.
+        pos = _make_txn(db, source_type=SourceType.POS_EXPORT, amount=Decimal("30.00"))
+        _make_match(db, pos_transaction_id=pos.id, platform_transaction_id=None)
+
+        service.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+
+        assert _discrepancies(db)[0].category == DiscrepancyCategory.MISSING_SETTLEMENT
 
 
 class TestUnexpectedSettlement:

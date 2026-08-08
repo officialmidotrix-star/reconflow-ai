@@ -65,6 +65,36 @@ class Transaction(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_utcnow)
 
 
+class TransactionOrderStatus(Base):
+    """
+    One row per Transaction that had a value in the optional order_status
+    column - a new table rather than a column on Transaction itself, same
+    create_all()-doesn't-alter-existing-tables reasoning as Lead Capture's
+    AnalysisLead. Only ever populated for POS_EXPORT transactions in
+    practice (order_status is only in that schema, per Cancellations/
+    Refunds design), but keyed generically off transaction_id rather than
+    assuming that in the schema itself.
+
+    Stores the raw string exactly as read from the file, not a coerced
+    enum - Data Validation's own schema registry docstring is explicit
+    that real export formats haven't been sampled yet, so which spellings
+    actually mean "cancelled" is something to refine once real samples
+    exist, not something to lock in now by discarding whatever a file
+    actually said. Interpretation (does this raw value indicate a
+    cancellation) lives in Discrepancy Detection, the one place that
+    needs to act on it.
+    """
+
+    __tablename__ = "transaction_order_statuses"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    transaction_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("transactions.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+    )
+    raw_status: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_utcnow)
+
+
 class NormalizationRun(Base):
     __tablename__ = "normalization_runs"
 

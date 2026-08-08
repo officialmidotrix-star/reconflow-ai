@@ -121,6 +121,20 @@ class TestValidPosExport:
         assert result.row_count == 1
         assert result.issues == []
 
+    def test_optional_order_status_column_is_accepted_when_present(self, service, db, storage):
+        content = (
+            b"order_id,order_time,amount,order_status\n"
+            b"1001,2026-01-15,42.50,CANCELLED\n"
+            b"1002,2026-01-15,18.00,\n"  # present but empty for this row - fine, it's optional
+        )
+        uploaded = _make_uploaded_file(
+            db, storage, content=content, filename="pos.csv", source_type=SourceType.POS_EXPORT
+        )
+        result = service.validate_file(uploaded_file_id=uploaded.id, requested_by=USER_ID)
+        assert result.status == ValidationStatus.PASSED
+        assert result.row_count == 2
+        assert result.issues == []
+
     def test_amount_with_thousands_separator_and_quoting_is_valid(self, service, db, storage):
         # A comma inside an unquoted CSV field would split into two columns -
         # that's a real-world export mistake, not something this validator

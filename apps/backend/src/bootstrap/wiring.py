@@ -186,7 +186,7 @@ def _normalization_service(db: Session = Depends(get_db)) -> NormalizationServic
 
 
 def _matching_service(db: Session = Depends(get_db)) -> MatchingService:
-    return MatchingService(db=db, audit_logger=_audit_logger(db))
+    return MatchingService(db=db, audit_logger=_audit_logger(db), tz_lookup=_tz_lookup(db))
 
 
 def _comparison_service(db: Session = Depends(get_db)) -> ComparisonService:

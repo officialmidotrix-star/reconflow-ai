@@ -19,7 +19,7 @@ from sqlalchemy import Column, String, Table, create_engine, select
 from sqlalchemy.orm import Session
 
 from modules.imports.models import Base, SourceType
-from modules.matching.dependencies import InMemoryAuditLogger
+from modules.matching.dependencies import InMemoryAnalysisTimezoneLookup, InMemoryAuditLogger
 from modules.matching.exceptions import InsufficientTransactionsError
 from modules.matching.models import MatchingStatus, ReconciliationMatch
 from modules.matching.service import MatchingService
@@ -57,8 +57,19 @@ def audit_logger():
 
 
 @pytest.fixture()
-def service(db, audit_logger):
-    return MatchingService(db=db, audit_logger=audit_logger)
+def tz_lookup():
+    # UTC specifically so every existing test below keeps its exact prior
+    # behavior - astimezone(UTC) on an already-UTC datetime is a no-op.
+    # The bug fix itself is covered by dedicated non-UTC tests further
+    # down, not by changing what every other test here already asserts.
+    lookup = InMemoryAnalysisTimezoneLookup()
+    lookup.register(ANALYSIS_ID, "UTC", "SAR")
+    return lookup
+
+
+@pytest.fixture()
+def service(db, audit_logger, tz_lookup):
+    return MatchingService(db=db, audit_logger=audit_logger, tz_lookup=tz_lookup)
 
 
 def _day(offset: int = 0, hour: int = 10) -> datetime:
@@ -202,6 +213,60 @@ class TestAmountDateFallback:
         )
         run = service.run_matching(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
         assert run.matched_count == 0
+
+
+class TestBranchLocalDayBucketing:
+    def test_fallback_uses_branch_local_date_not_utc_date(self, db, audit_logger):
+        # Asia/Riyadh is UTC+3. These two UTC timestamps are both on
+        # 2026-01-15 in UTC (21:15 is still the 15th) - the pre-fix code
+        # (`.occurred_at.date()` on a UTC-stored value) would compute
+        # day_diff=0 for these, "same day". But converted to Riyadh local
+        # time, they're 2026-01-15 23:45 and 2026-01-16 00:15 - the
+        # platform transaction crossed local midnight 30 minutes after
+        # the POS one. day_diff should be 1, not 0, and the confidence
+        # score should reflect that decay.
+        pos_utc = datetime(2026, 1, 15, 20, 45, 0, tzinfo=dt_timezone.utc)
+        platform_utc = datetime(2026, 1, 15, 21, 15, 0, tzinfo=dt_timezone.utc)
+        assert pos_utc.date() == platform_utc.date()  # sanity check: same UTC calendar date
+
+        _make_txn(
+            db, source_type=SourceType.POS_EXPORT, external_reference="1001",
+            occurred_at=pos_utc, amount=Decimal("50.00"),
+        )
+        _make_txn(
+            db, source_type=SourceType.PLATFORM_SETTLEMENT, external_reference="2002",
+            occurred_at=platform_utc, amount=Decimal("50.00"),  # different ref -> fallback pass
+        )
+
+        riyadh_tz_lookup = InMemoryAnalysisTimezoneLookup()
+        riyadh_tz_lookup.register(ANALYSIS_ID, "Asia/Riyadh", "SAR")
+        service = MatchingService(db=db, audit_logger=audit_logger, tz_lookup=riyadh_tz_lookup)
+
+        run = service.run_matching(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+
+        assert run.matched_count == 1
+        match = _matches_for(db)[0]
+        assert match.confidence_score == Decimal("0.65")  # 0.70 - 0.05*1, i.e. day_diff correctly 1
+
+    def test_defaults_to_utc_when_branch_timezone_unconfigured(self, db, audit_logger):
+        # get_timezone() returning None shouldn't crash matching - it
+        # falls back to UTC, preserving pre-fix behavior for that edge
+        # case rather than introducing a new failure mode.
+        empty_tz_lookup = InMemoryAnalysisTimezoneLookup()  # nothing registered
+        service = MatchingService(db=db, audit_logger=audit_logger, tz_lookup=empty_tz_lookup)
+
+        _make_txn(
+            db, source_type=SourceType.POS_EXPORT, external_reference="1001",
+            occurred_at=_day(0), amount=Decimal("50.00"),
+        )
+        _make_txn(
+            db, source_type=SourceType.PLATFORM_SETTLEMENT, external_reference="2002",
+            occurred_at=_day(3), amount=Decimal("50.00"),
+        )
+        run = service.run_matching(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+
+        assert run.matched_count == 1
+        assert _matches_for(db)[0].confidence_score == Decimal("0.55")  # 0.70 - 0.05*3, same as UTC test
 
 
 class TestUnmatchedRecording:

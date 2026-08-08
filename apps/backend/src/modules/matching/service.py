@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -28,7 +29,7 @@ from sqlalchemy.orm import Session
 from modules.imports.models import SourceType
 from modules.normalization.models import Transaction
 
-from .dependencies import AuditLogger
+from .dependencies import AnalysisTimezoneLookup, AuditLogger
 from .exceptions import InsufficientTransactionsError, MatchingPersistError
 from .models import MatchingRun, MatchingStatus, ReconciliationMatch
 
@@ -49,6 +50,7 @@ class MatchingService:
         *,
         db: Session,
         audit_logger: AuditLogger,
+        tz_lookup: AnalysisTimezoneLookup,
         day_window: int = DAY_WINDOW,
         exact_confidence: Decimal = EXACT_CONFIDENCE,
         base_fallback_confidence: Decimal = BASE_FALLBACK_CONFIDENCE,
@@ -57,6 +59,7 @@ class MatchingService:
     ) -> None:
         self._db = db
         self._audit_logger = audit_logger
+        self._tz_lookup = tz_lookup
         self._day_window = day_window
         self._exact_confidence = exact_confidence
         self._base_fallback_confidence = base_fallback_confidence
@@ -80,8 +83,19 @@ class MatchingService:
         unmatched_platform = {t.id: t for t in platform_txns}
         matches: list[ReconciliationMatch] = []
 
+        # Normalization already requires a configured timezone before it'll
+        # produce Transaction rows at all (BranchConfigurationMissingError
+        # otherwise), so in practice this is never actually None by the
+        # time matching runs - but defaulting to UTC rather than raising
+        # keeps this fix from becoming a new way for matching to fail on
+        # top of being a correctness improvement.
+        tz_name = self._tz_lookup.get_timezone(analysis_id)
+        tzinfo = ZoneInfo(tz_name) if tz_name else timezone.utc
+
         self._match_exact_references(unmatched_pos, unmatched_platform, matches, analysis_id)
-        self._match_amount_and_date_fallback(unmatched_pos, unmatched_platform, matches, analysis_id)
+        self._match_amount_and_date_fallback(
+            unmatched_pos, unmatched_platform, matches, analysis_id, tzinfo
+        )
         self._record_remaining_as_unmatched(unmatched_pos, unmatched_platform, matches, analysis_id)
 
         return self._persist(analysis_id, matches, requested_by)
@@ -134,15 +148,23 @@ class MatchingService:
         unmatched_platform: dict[str, Transaction],
         matches: list[ReconciliationMatch],
         analysis_id: str,
+        tzinfo: ZoneInfo | timezone,
     ) -> None:
         for pos_txn in sorted(unmatched_pos.values(), key=lambda t: (t.occurred_at, t.id)):
+            # occurred_at is stored UTC - .date() on it directly would be
+            # the UTC calendar date, not the branch's, silently miscounting
+            # day-distance near midnight for any branch off UTC. Converting
+            # to branch-local time first is the actual fix; everything else
+            # about the fallback pass is unchanged.
+            pos_local_date = pos_txn.occurred_at.astimezone(tzinfo).date()
             candidates: list[tuple[int, Transaction]] = []
             for platform_txn in unmatched_platform.values():
                 if platform_txn.currency_code != pos_txn.currency_code:
                     continue
                 if platform_txn.amount != pos_txn.amount:
                     continue
-                day_diff = abs((platform_txn.occurred_at.date() - pos_txn.occurred_at.date()).days)
+                platform_local_date = platform_txn.occurred_at.astimezone(tzinfo).date()
+                day_diff = abs((platform_local_date - pos_local_date).days)
                 if day_diff <= self._day_window:
                     candidates.append((day_diff, platform_txn))
 

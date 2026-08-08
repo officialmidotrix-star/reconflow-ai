@@ -28,7 +28,7 @@ from modules.normalization.exceptions import (
     FileNotValidatedError,
     UploadedFileNotFoundError,
 )
-from modules.normalization.models import NormalizationStatus, Transaction
+from modules.normalization.models import NormalizationStatus, Transaction, TransactionOrderStatus
 from modules.normalization.service import NormalizationService
 from modules.validation.dependencies import InMemoryAuditLogger as ValidationAuditLogger
 from modules.validation.service import ValidationService
@@ -137,6 +137,79 @@ class TestPosExportNormalization:
         # 2026-01-15 10:00 in Asia/Riyadh (UTC+3) -> 2026-01-15 07:00 UTC
         assert txn.occurred_at.astimezone(dt_timezone.utc).hour == 7
         assert txn.occurred_at.tzinfo is not None
+
+
+class TestOrderStatusPersistence:
+    def test_order_status_persisted_when_column_present_and_populated(
+        self, service, db, storage, validation_service
+    ):
+        content = (
+            b"order_id,order_time,amount,order_status\n"
+            b"1001,2026-01-15 10:00:00,42.50,Cancelled by customer\n"
+        )
+        uploaded = _upload_and_validate(
+            db, storage, validation_service, content=content, filename="pos.csv",
+            source_type=SourceType.POS_EXPORT,
+        )
+        service.normalize_file(uploaded_file_id=uploaded.id, requested_by=USER_ID)
+
+        txn = db.execute(select(Transaction).where(Transaction.uploaded_file_id == uploaded.id)).scalar_one()
+        status = db.execute(
+            select(TransactionOrderStatus).where(TransactionOrderStatus.transaction_id == txn.id)
+        ).scalar_one()
+        assert status.raw_status == "Cancelled by customer"
+
+    def test_no_status_row_created_when_column_absent(self, service, db, storage, validation_service):
+        content = b"order_id,order_time,amount\n1001,2026-01-15 10:00:00,42.50\n"
+        uploaded = _upload_and_validate(
+            db, storage, validation_service, content=content, filename="pos.csv",
+            source_type=SourceType.POS_EXPORT,
+        )
+        service.normalize_file(uploaded_file_id=uploaded.id, requested_by=USER_ID)
+
+        txn = db.execute(select(Transaction).where(Transaction.uploaded_file_id == uploaded.id)).scalar_one()
+        status = db.execute(
+            select(TransactionOrderStatus).where(TransactionOrderStatus.transaction_id == txn.id)
+        ).scalar_one_or_none()
+        assert status is None
+
+    def test_no_status_row_created_when_column_present_but_empty_for_that_row(
+        self, service, db, storage, validation_service
+    ):
+        content = b"order_id,order_time,amount,order_status\n1001,2026-01-15 10:00:00,42.50,\n"
+        uploaded = _upload_and_validate(
+            db, storage, validation_service, content=content, filename="pos.csv",
+            source_type=SourceType.POS_EXPORT,
+        )
+        service.normalize_file(uploaded_file_id=uploaded.id, requested_by=USER_ID)
+
+        txn = db.execute(select(Transaction).where(Transaction.uploaded_file_id == uploaded.id)).scalar_one()
+        status = db.execute(
+            select(TransactionOrderStatus).where(TransactionOrderStatus.transaction_id == txn.id)
+        ).scalar_one_or_none()
+        assert status is None
+
+    def test_rerun_supersedes_rather_than_duplicates(self, service, db, storage, validation_service):
+        # This checks the Transaction-level supersede, not the FK cascade
+        # itself - SQLite doesn't enforce foreign keys unless explicitly
+        # told to, and properly exercising ondelete=CASCADE here would
+        # need a full valid User/Organization/Branch/Analysis chain
+        # hand-built just for one test. Verified live against real
+        # Postgres instead, where that chain already exists naturally
+        # from actually running the pipeline.
+        content = (
+            b"order_id,order_time,amount,order_status\n"
+            b"1001,2026-01-15 10:00:00,42.50,CANCELLED\n"
+        )
+        uploaded = _upload_and_validate(
+            db, storage, validation_service, content=content, filename="pos.csv",
+            source_type=SourceType.POS_EXPORT,
+        )
+        service.normalize_file(uploaded_file_id=uploaded.id, requested_by=USER_ID)
+        service.normalize_file(uploaded_file_id=uploaded.id, requested_by=USER_ID)  # rerun
+
+        txns = db.execute(select(Transaction).where(Transaction.uploaded_file_id == uploaded.id)).scalars().all()
+        assert len(txns) == 1
 
 
 class TestPlatformSettlementNormalization:

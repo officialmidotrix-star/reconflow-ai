@@ -88,6 +88,12 @@ class ColumnSpec:
     accepted_headers: tuple[str, ...]
     validator: Callable[[str], bool]
     issue_code: IssueCode
+    # Defaults True so every existing entry below stays required without
+    # being touched - only order_status (added for cancellation
+    # detection) sets this False. An optional column that's absent from
+    # a file is not a validation failure; one that's present still gets
+    # its values checked by `validator` like any other column.
+    is_required: bool = True
 
     def matches_header(self, header: str) -> bool:
         normalized = normalize_header(header)
@@ -120,6 +126,20 @@ SOURCE_TYPE_SCHEMAS: dict[SourceType, tuple[ColumnSpec, ...]] = {
             accepted_headers=("amount", "total", "order total", "net amount"),
             validator=is_valid_decimal,
             issue_code=IssueCode.INVALID_NUMBER,
+        ),
+        ColumnSpec(
+            field_name="order_status",
+            accepted_headers=("order_status", "order status", "status"),
+            # Deliberately permissive: this column's whole purpose is to
+            # catch a cancellation/refund when a restaurant's POS export
+            # happens to include one, in whatever spelling their system
+            # uses - "CANCELLED", "Refunded", "voided", anything.
+            # Normalization decides what the value means; validation's
+            # only job for an optional column is "did a value get read",
+            # not "is it one of the values we anticipated".
+            validator=lambda _value: True,
+            issue_code=IssueCode.INVALID_STATUS_VALUE,
+            is_required=False,
         ),
     ),
     SourceType.PLATFORM_SETTLEMENT: (
