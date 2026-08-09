@@ -24,7 +24,7 @@ from __future__ import annotations
 from collections import defaultdict
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from modules.ai_insights.models import AIInsight
@@ -137,18 +137,35 @@ class AnalysisResultsService:
         back to when a file doesn't specify its own currency, so this
         stays consistent with what actually got stored rather than a
         second, separately-resolved opinion.
-        """
-        distinct_currencies = self._db.execute(
-            select(Transaction.currency_code)
-            .where(Transaction.analysis_id == analysis_id)
-            .distinct()
-            .order_by(Transaction.currency_code)
-        ).scalars().all()
 
-        if not distinct_currencies:
+        Among genuinely mixed currencies, the org's own default wins
+        whenever it's represented at all in this analysis's data, even
+        if it isn't the majority - a small minority of foreign-currency
+        orders (a handful of DZD orders among mostly SAR/USD, say)
+        shouldn't bump the org's home currency off the headline figure
+        just because it happened to sort first or occurred more often in
+        one particular period. Only falls through to most-frequent
+        (alphabetical as the tiebreak for a genuine tie) when the org's
+        own currency isn't present in the data at all.
+        """
+        counts = self._db.execute(
+            select(Transaction.currency_code, func.count())
+            .where(Transaction.analysis_id == analysis_id)
+            .group_by(Transaction.currency_code)
+            .order_by(func.count().desc(), Transaction.currency_code)
+        ).all()
+
+        if not counts:
             return self._resolve_currency_from_branch(branch_id), False
 
-        return distinct_currencies[0], len(distinct_currencies) > 1
+        distinct_currencies = [currency for currency, _count in counts]
+        has_mixed_currencies = len(distinct_currencies) > 1
+
+        org_default = self._resolve_currency_from_branch(branch_id)
+        if org_default in distinct_currencies:
+            return org_default, has_mixed_currencies
+
+        return distinct_currencies[0], has_mixed_currencies  # most-frequent, alphabetical tiebreak
 
     def _resolve_currency_from_branch(self, branch_id: str) -> str:
         branch = self._db.get(Branch, branch_id)

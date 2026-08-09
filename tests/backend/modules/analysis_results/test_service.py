@@ -119,7 +119,71 @@ class TestCurrencyResolution:
         summary = service.get_summary(ANALYSIS_ID)
 
         assert summary.has_mixed_currencies is True
-        assert summary.currency in ("SAR", "USD")  # a real value, not fabricated - which one is secondary
+        assert summary.currency == "SAR"  # the org default, present in the data - deterministic now
+
+    def test_org_default_wins_even_when_its_a_small_minority(self, db, service):
+        # The exact scenario reported live: 10 DZD orders against 105
+        # split between SAR/USD, org default SAR. Alphabetically DZD
+        # sorts first ('D' < 'S' < 'U') and would win under a naive
+        # order-by-name pick despite being the smallest slice by far.
+        _seed_analysis(db)  # org default is SAR
+        for i in range(10):
+            _make_txn(
+                db, source_type=SourceType.POS_EXPORT, amount=Decimal("10.00"),
+                external_reference=f"DZD-{i}", currency_code="DZD",
+            )
+        for i in range(60):
+            _make_txn(
+                db, source_type=SourceType.POS_EXPORT, amount=Decimal("10.00"),
+                external_reference=f"USD-{i}", currency_code="USD",
+            )
+        for i in range(45):
+            _make_txn(
+                db, source_type=SourceType.POS_EXPORT, amount=Decimal("10.00"),
+                external_reference=f"SAR-{i}", currency_code="SAR",
+            )
+
+        summary = service.get_summary(ANALYSIS_ID)
+
+        # SAR wins because it's the org default and present - even though
+        # USD (60 orders) is more frequent than SAR (45 orders) here.
+        assert summary.currency == "SAR"
+        assert summary.has_mixed_currencies is True
+
+    def test_falls_back_to_most_frequent_when_org_currency_is_entirely_absent(self, db, service):
+        # Org default is SAR, but this analysis has no SAR transactions
+        # at all - nothing to prefer, so most-frequent is the least
+        # surprising choice. USD (3) beats DZD (1) here.
+        _seed_analysis(db)
+        for i in range(3):
+            _make_txn(
+                db, source_type=SourceType.POS_EXPORT, amount=Decimal("10.00"),
+                external_reference=f"USD-{i}", currency_code="USD",
+            )
+        _make_txn(
+            db, source_type=SourceType.POS_EXPORT, amount=Decimal("10.00"),
+            external_reference="DZD-1", currency_code="DZD",
+        )
+
+        summary = service.get_summary(ANALYSIS_ID)
+
+        assert summary.currency == "USD"
+        assert summary.has_mixed_currencies is True
+
+    def test_alphabetical_tiebreak_when_frequencies_tie_and_org_currency_absent(self, db, service):
+        _seed_analysis(db)  # org default SAR, not present below
+        _make_txn(
+            db, source_type=SourceType.POS_EXPORT, amount=Decimal("10.00"),
+            external_reference="USD-1", currency_code="USD",
+        )
+        _make_txn(
+            db, source_type=SourceType.POS_EXPORT, amount=Decimal("10.00"),
+            external_reference="DZD-1", currency_code="DZD",
+        )
+
+        summary = service.get_summary(ANALYSIS_ID)
+
+        assert summary.currency == "DZD"  # tied 1-1, 'D' < 'U'
 
 
 class TestGetSummary:
