@@ -7,11 +7,11 @@ that resolves a bearer token to a user id via IdentityAccessService.
 Wiring every other router's own placeholder to actually call this is
 application-assembly work, not this module's job (see package docstring).
 
-POST /users is deliberately open (no auth required) - bootstrapping the
-very first account has to be possible before anyone can log in. Real
-deployments would want this locked down (invite-only, or "first user
-becomes Owner") - flagged here, not solved, since that's a product
-decision beyond this module's scope.
+POST /users requires a signed-in OWNER (own organization only) or the
+platform operator. The very first account is no longer created over HTTP:
+the platform operator is created by bootstrap/create_operator.py (or the
+startup seed), and the operator then creates each client organization and
+its first OWNER. Route-level authorization lives in bootstrap/access.py.
 """
 
 from __future__ import annotations
@@ -65,10 +65,14 @@ async def get_current_user_id(
 @router.post("/users", response_model=UserResponse, status_code=201)
 async def create_user(
     body: CreateUserRequest,
+    requested_by: str = Depends(get_current_user_id),
     service: IdentityAccessService = Depends(get_identity_access_service),
 ) -> UserResponse:
     try:
-        user = service.create_user(email=body.email, password=body.password, role=body.role)
+        user = service.create_user(
+            email=body.email, password=body.password, role=body.role,
+            organization_id=body.organization_id, created_by=requested_by,
+        )
     except IdentityAccessError_ as exc:
         raise HTTPException(
             status_code=exc.http_status, detail={"error_code": exc.error_code, "message": exc.message}

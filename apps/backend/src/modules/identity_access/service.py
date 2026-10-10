@@ -17,12 +17,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session as DBSession
 
 from modules.imports.dependencies import AuthContext
+from modules.organizations.models import Branch, Organization
 
 from .dependencies import AuditLogger
 from .exceptions import (
+    CrossOrganizationError,
     EmailAlreadyExistsError,
     IdentityPersistError,
     InsufficientRoleError,
+    InvalidUserScopeError,
+    OperatorRoleNotAssignableError,
     InvalidCredentialsError,
     InvalidSessionError,
     UserNotFoundError,
@@ -49,19 +53,81 @@ class IdentityAccessService:
         self._audit_logger = audit_logger
         self._session_lifetime = session_lifetime
 
-    def create_user(self, *, email: str, password: str, role: UserRole) -> User:
+    def create_user(
+        self,
+        *,
+        email: str,
+        password: str,
+        role: UserRole,
+        organization_id: str | None = None,
+        created_by: str | None = None,
+    ) -> User:
+        """Create a client user. PLATFORM_OPERATOR is never creatable here.
+
+        When `created_by` is given (every HTTP path), the actor's own
+        authority bounds the result: a PLATFORM_OPERATOR may create a user
+        in any organization; an OWNER may create users only inside their
+        own organization; nobody else may create users at all. Callers
+        that pass no actor (seed scripts, tests) are trusted code and only
+        the structural invariants are checked.
+        """
+        if role == UserRole.PLATFORM_OPERATOR:
+            raise OperatorRoleNotAssignableError(
+                "The platform-operator role cannot be assigned through the API."
+            )
+        organization_id = self._resolve_creation_org(created_by, organization_id)
+        return self._insert_user(
+            email=email, password=password, role=role, organization_id=organization_id,
+            audit_user_id=created_by,
+        )
+
+    def create_operator(self, *, email: str, password: str) -> User:
+        """Create (or refuse to duplicate) a platform operator. Only
+        called from bootstrap/create_operator.py and the startup seed -
+        there is deliberately no HTTP route to it."""
+        return self._insert_user(
+            email=email, password=password, role=UserRole.PLATFORM_OPERATOR,
+            organization_id=None, audit_user_id=None,
+        )
+
+    def _resolve_creation_org(self, created_by: str | None, requested_org: str | None) -> str:
+        if created_by is not None:
+            actor = self._db.get(User, created_by)
+            if actor is None or not actor.is_active:
+                raise InsufficientRoleError("You are not allowed to create users.")
+            if actor.role == UserRole.OWNER:
+                if requested_org is not None and requested_org != actor.organization_id:
+                    # Same answer as 'no such organization' - never confirm
+                    # that another client's organization exists.
+                    raise CrossOrganizationError("We couldn't find that organization.")
+                requested_org = actor.organization_id
+            elif actor.role != UserRole.PLATFORM_OPERATOR:
+                raise InsufficientRoleError("Only an Owner or the platform operator can create users.")
+        if requested_org is None:
+            raise InvalidUserScopeError("Every user except the platform operator must belong to an organization.")
+        if self._db.get(Organization, requested_org) is None:
+            raise CrossOrganizationError("We couldn't find that organization.")
+        return requested_org
+
+    def _insert_user(
+        self, *, email: str, password: str, role: UserRole,
+        organization_id: str | None, audit_user_id: str | None,
+    ) -> User:
         existing = self._db.execute(select(User).where(User.email == email)).scalar_one_or_none()
         if existing is not None:
             raise EmailAlreadyExistsError("An account with that email already exists.")
 
-        user = User(email=email, password_hash=hash_password(password), role=role)
+        user = User(
+            email=email, password_hash=hash_password(password), role=role,
+            organization_id=organization_id,
+        )
         self._db.add(user)
         self._commit()
         self._db.refresh(user)
 
         self._audit_logger.log(
-            event="user_created", user_id=user.id, analysis_id=None,
-            metadata={"email": email, "role": role.value},
+            event="user_created", user_id=audit_user_id or user.id, analysis_id=None,
+            metadata={"email": email, "role": role.value, "organization_id": organization_id},
         )
         return user
 
@@ -129,6 +195,15 @@ class IdentityAccessService:
         user = self._db.get(User, user_id)
         if user is None:
             raise UserNotFoundError("We couldn't find that user.")
+        branch = self._db.get(Branch, branch_id)
+        # A grant can only ever connect a user to a branch of the user's
+        # own organization (operators hold no grants - they see everything).
+        if (
+            branch is None
+            or user.role == UserRole.PLATFORM_OPERATOR
+            or branch.organization_id != user.organization_id
+        ):
+            raise CrossOrganizationError("We couldn't find that branch.")
 
         existing = self._db.execute(
             select(UserBranchAccess).where(

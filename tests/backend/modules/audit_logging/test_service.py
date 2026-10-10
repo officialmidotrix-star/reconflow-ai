@@ -27,7 +27,7 @@ from modules.audit_logging.service import AuditLogService
 from modules.identity_access.models import User, UserRole
 from modules.identity_access.service import IdentityAccessService
 from modules.imports.models import Base
-from modules.organizations.models import Branch
+from modules.organizations.models import Branch, Organization
 
 USER_ID = "user-1"
 BRANCH_ID = "branch-1"
@@ -38,6 +38,8 @@ def db(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path}/test.db")
     Base.metadata.create_all(engine)
     with Session(engine) as session:
+        session.add(Organization(id="org-1", legal_name="Acme", default_currency="SAR"))
+        session.commit()
         yield session
 
 
@@ -124,7 +126,8 @@ class TestSatisfiesIdentityAccessAuditLogger:
     def test_real_service_works_with_identity_access(self, db, service):
         identity_service = IdentityAccessService(db=db, audit_logger=service)
         user = identity_service.create_user(
-            email="owner@example.com", password="s3cret!", role=UserRole.OWNER
+            email="owner@example.com", password="s3cret!", role=UserRole.OWNER,
+            organization_id="org-1",
         )
         entries = service.list_entries(event="user_created")
         assert len(entries) == 1
@@ -133,7 +136,7 @@ class TestSatisfiesIdentityAccessAuditLogger:
 
 class TestSatisfiesAnalysisOrchestrationAuditLogger:
     def test_real_service_works_with_analysis_orchestration(self, db, service):
-        user = User(email="owner2@example.com", password_hash="x", role=UserRole.OWNER)
+        user = User(email="owner2@example.com", password_hash="x", role=UserRole.OWNER, organization_id="org-1")
         db.add(user)
         db.commit()
         db.refresh(user)

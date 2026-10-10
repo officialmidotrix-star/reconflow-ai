@@ -33,6 +33,12 @@ def get_current_user_id() -> str:
     raise NotImplementedError("Wire up real authentication in the Identity & Access module.")
 
 
+def get_audit_org_scope() -> str | None:
+    """Placeholder wired at start-up: the organization whose entries the
+    caller may read, or None for the platform operator (all entries)."""
+    raise NotImplementedError("Wire up the access context at application start-up.")
+
+
 @router.get("", response_model=list[AuditLogEntryResponse])
 async def list_audit_log(
     analysis_id: str | None = Query(default=None),
@@ -40,9 +46,11 @@ async def list_audit_log(
     event: str | None = Query(default=None),
     limit: int = Query(default=100, le=1000),
     _requested_by: str = Depends(get_current_user_id),
+    org_scope: str | None = Depends(get_audit_org_scope),
     service: AuditLogService = Depends(get_audit_log_service),
 ) -> list[AuditLogEntryResponse]:
     entries = service.list_entries(
-        analysis_id=analysis_id, user_id=user_id, event=event, limit=limit
+        analysis_id=analysis_id, user_id=user_id, event=event, limit=limit,
+        organization_id=org_scope,
     )
     return [AuditLogEntryResponse.model_validate(e) for e in entries]

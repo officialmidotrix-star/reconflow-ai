@@ -4,7 +4,7 @@ ReconFlow AI - application entry point.
 Run with: uvicorn main:app --reload (from apps/backend/src/)
 
 Everything module-specific lives in the 16 modules themselves; everything
-here is composition - creating tables, including routers, and wiring
+here is composition - verifying the schema, including routers, and wiring
 every placeholder dependency to its real implementation, per
 bootstrap/wiring.py.
 """
@@ -17,13 +17,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from bootstrap.config import get_allowed_origins
-from bootstrap.database import create_all_tables
+from bootstrap.schema import ensure_schema
+from bootstrap.seed import run_operator_seed
 from bootstrap.wiring import register_all
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    create_all_tables()
+    ensure_schema()
+    run_operator_seed()
     yield
 
 
@@ -46,8 +48,6 @@ app.add_middleware(
 )
 
 register_all(app)
-from bootstrap.seed import run_owner_seed
-run_owner_seed()
 
 
 @app.get("/health", tags=["health"])

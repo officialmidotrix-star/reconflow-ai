@@ -1,3 +1,10 @@
+> **Superseded in part (2026-10).** This file predates the tenancy work. Current decisions, the
+> architecture as actually implemented (multi-organization, platform-operator role, Alembic
+> migrations) and the work plan live in [`DECISIONS.md`](DECISIONS.md); evidence is in
+> [`docs/AUDIT_2026-10-07.md`](docs/AUDIT_2026-10-07.md); production steps in
+> [`docs/BATCH1_RUNBOOK.md`](docs/BATCH1_RUNBOOK.md). Module/test counts below are out of date
+> (18 modules; 306 tests pass + 10 PostgreSQL-only tests that run when `RECONFLOW_TEST_PG_URL` is set).
+
 # ReconFlow AI — Project Status
 
 **Status:** All 16 backend modules implemented, tested, and composed into one running FastAPI application. 217/217 tests passing.

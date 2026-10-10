@@ -22,14 +22,25 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import Depends, FastAPI, HTTPException
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import Depends, FastAPI
 from sqlalchemy.orm import Session
 
 from storage.file_storage import LocalEncryptedFileStorage
 
+from .access import (
+    ScopedAuditLogService,
+    ScopeResolver,
+    AccessContext,
+    current_access,
+    current_audit_org_scope,
+    current_branch_scope,
+    current_organization_id,
+    current_user_id,
+    enforce_policy,
+)
 from .config import get_encryption_key, get_storage_dir, has_anthropic_credentials, has_smtp_credentials
 from .database import get_db
+from . import tenancy_routes
 
 # Routers - importing each transitively imports its models (registering
 # every table on Base.metadata) and its service/exceptions/dependencies.
@@ -62,7 +73,6 @@ from modules.audit_logging.service import AuditLogService
 from modules.deployment.service import DeploymentService
 from modules.discrepancies.service import DiscrepancyService
 from modules.financial_comparison.service import ComparisonService
-from modules.identity_access.exceptions import IdentityAccessError_
 from modules.identity_access.service import IdentityAccessService
 from modules.imports.dependencies import AuthContext
 from modules.imports.security import NoOpMalwareScanner
@@ -80,8 +90,6 @@ from modules.reporting.service import ReportService
 from modules.validation.service import ValidationService
 
 logger = logging.getLogger("reconflow.bootstrap.wiring")
-
-_bearer_scheme = HTTPBearer(auto_error=False)
 
 # -- singletons that don't need a per-request db session ---------------
 
@@ -109,8 +117,9 @@ else:
 # -- per-request helper services (share the request's db session) -------
 
 
-def _audit_logger(db: Session) -> AuditLogService:
-    return AuditLogService(db=db)
+def _audit_logger(db: Session) -> ScopedAuditLogService:
+    # Stamps every audit entry with its organization (see access.py).
+    return ScopedAuditLogService(db=db)
 
 
 def _identity_service(db: Session) -> IdentityAccessService:
@@ -129,40 +138,19 @@ def _contract_lookup(db: Session) -> ReferenceContractService:
     return ReferenceContractService(db=db, audit_logger=_audit_logger(db))
 
 
-# -- shared auth resolvers, overriding every module's placeholder --------
-
-
-def _current_user_id(
-    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
-    db: Session = Depends(get_db),
-) -> str:
-    if credentials is None:
-        raise HTTPException(
-            status_code=401, detail={"error_code": "MISSING_TOKEN", "message": "Sign in required."}
-        )
-    try:
-        user = _identity_service(db).get_current_user(token=credentials.credentials)
-    except IdentityAccessError_ as exc:
-        raise HTTPException(
-            status_code=exc.http_status, detail={"error_code": exc.error_code, "message": exc.message}
-        ) from exc
-    return user.id
+# -- Data Import's richer auth context --------------------------------------
+# Authentication, role and resource scope are enforced for EVERY route by
+# access.enforce_policy (see access.py); this only adapts the already
+# authenticated caller to the AuthContext shape Data Import expects.
 
 
 def _current_auth(
-    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
-    db: Session = Depends(get_db),
+    ctx: AccessContext = Depends(current_access), db: Session = Depends(get_db)
 ) -> AuthContext:
-    if credentials is None:
-        raise HTTPException(
-            status_code=401, detail={"error_code": "MISSING_TOKEN", "message": "Sign in required."}
-        )
-    try:
-        return _identity_service(db).build_auth_context(token=credentials.credentials)
-    except IdentityAccessError_ as exc:
-        raise HTTPException(
-            status_code=exc.http_status, detail={"error_code": exc.error_code, "message": exc.message}
-        ) from exc
+    return AuthContext(
+        user_id=ctx.user_id,
+        accessible_branch_ids=ScopeResolver(db).accessible_branch_ids(ctx),
+    )
 
 
 # -- per-module service factories, overriding each get_X_service --------
@@ -238,7 +226,7 @@ def _reference_contract_service(db: Session = Depends(get_db)) -> ReferenceContr
 
 
 def _audit_log_service(db: Session = Depends(get_db)) -> AuditLogService:
-    return AuditLogService(db=db)
+    return ScopedAuditLogService(db=db)
 
 
 def _deployment_service(db: Session = Depends(get_db)) -> DeploymentService:
@@ -266,6 +254,7 @@ _ALL_ROUTERS = [
     lead_capture_router,
     reporting_router,
     notification_router,
+    tenancy_routes,
 ]
 
 # Every module except Identity & Access (which owns the real
@@ -302,14 +291,22 @@ _SERVICE_OVERRIDES = {
 
 def register_all(app: FastAPI) -> None:
     """Include every module's router and override every placeholder
-    dependency with its real implementation. Called once, from main.py."""
+    dependency with its real implementation. Called once, from main.py.
+
+    Every router is included with enforce_policy as a router-level
+    dependency, so authentication, role and tenant scope are checked on
+    every route before its handler runs - and a route with no row in
+    access.POLICIES is denied."""
     for router_module in _ALL_ROUTERS:
-        app.include_router(router_module.router)
+        app.include_router(router_module.router, dependencies=[Depends(enforce_policy)])
 
     for placeholder, real in _SERVICE_OVERRIDES.items():
         app.dependency_overrides[placeholder] = real
 
     for router_module in _USER_ID_AUTH_MODULES:
-        app.dependency_overrides[router_module.get_current_user_id] = _current_user_id
+        app.dependency_overrides[router_module.get_current_user_id] = current_user_id
 
     app.dependency_overrides[imports_router.get_current_auth] = _current_auth
+    app.dependency_overrides[organizations_router.get_current_organization_id] = current_organization_id
+    app.dependency_overrides[organizations_router.get_branch_scope] = current_branch_scope
+    app.dependency_overrides[audit_logging_router.get_audit_org_scope] = current_audit_org_scope

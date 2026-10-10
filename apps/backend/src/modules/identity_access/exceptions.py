@@ -38,3 +38,22 @@ class InsufficientRoleError(IdentityAccessError_):
 class IdentityPersistError(IdentityAccessError_):
     error_code = "IDENTITY_PERSIST_FAILED"
     http_status = 500
+
+
+class InvalidUserScopeError(IdentityAccessError_):
+    """Role/organization combination violates the tenancy invariants."""
+
+    error_code = "INVALID_USER_SCOPE"
+    http_status = 422
+
+
+class OperatorRoleNotAssignableError(IdentityAccessError_):
+    error_code = "OPERATOR_ROLE_NOT_ASSIGNABLE"
+    http_status = 403
+
+
+class CrossOrganizationError(IdentityAccessError_):
+    """Deliberately the same shape as 'not found' - see access.py."""
+
+    error_code = "NOT_FOUND"
+    http_status = 404

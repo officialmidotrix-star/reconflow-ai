@@ -44,7 +44,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/auth/login": {
@@ -85,7 +90,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/auth/logout": {
@@ -193,6 +203,35 @@
       }
     },
     "/organizations": {
+      "get": {
+        "tags": [
+          "tenancy"
+        ],
+        "summary": "List My Organizations",
+        "description": "Operator: every organization. Everyone else: their own.",
+        "operationId": "list_my_organizations_organizations_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/OrganizationResponse"
+                  },
+                  "type": "array",
+                  "title": "Response List My Organizations Organizations Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
       "post": {
         "tags": [
           "organizations"
@@ -230,7 +269,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/organizations/current": {
@@ -259,7 +303,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/branches": {
@@ -300,7 +349,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/branches/{branch_id}": {
@@ -310,6 +364,11 @@
         ],
         "summary": "Get Branch",
         "operationId": "get_branch_branches__branch_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "branch_id",
@@ -352,6 +411,11 @@
         ],
         "summary": "List Branches",
         "operationId": "list_branches_organizations__organization_id__branches_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "organization_id",
@@ -413,7 +477,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -452,7 +521,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/contracts": {
@@ -493,7 +567,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/branches/{branch_id}/contracts": {
@@ -503,6 +582,11 @@
         ],
         "summary": "List Contracts For Branch",
         "operationId": "list_contracts_for_branch_branches__branch_id__contracts_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "branch_id",
@@ -549,6 +633,11 @@
         ],
         "summary": "List Audit Log",
         "operationId": "list_audit_log_audit_log_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "analysis_id",
@@ -656,7 +745,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/deployment/license": {
@@ -697,7 +791,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/deployment/updates": {
@@ -722,7 +821,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -761,7 +865,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/analyses/{analysis_id}/files": {
@@ -771,6 +880,11 @@
         ],
         "summary": "Upload File",
         "operationId": "upload_file_analyses__analysis_id__files_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "analysis_id",
@@ -823,6 +937,11 @@
         ],
         "summary": "Validate Uploaded File",
         "operationId": "validate_uploaded_file_uploaded_files__uploaded_file_id__validation_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "uploaded_file_id",
@@ -865,6 +984,11 @@
         ],
         "summary": "Normalize Uploaded File",
         "operationId": "normalize_uploaded_file_uploaded_files__uploaded_file_id__normalization_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "uploaded_file_id",
@@ -907,6 +1031,11 @@
         ],
         "summary": "Run Matching",
         "operationId": "run_matching_analyses__analysis_id__matching_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "analysis_id",
@@ -949,6 +1078,11 @@
         ],
         "summary": "Run Comparison",
         "operationId": "run_comparison_analyses__analysis_id__comparison_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "analysis_id",
@@ -991,6 +1125,11 @@
         ],
         "summary": "Detect Discrepancies",
         "operationId": "detect_discrepancies_analyses__analysis_id__discrepancies_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "analysis_id",
@@ -1024,6 +1163,55 @@
             }
           }
         }
+      },
+      "get": {
+        "tags": [
+          "analysis-results"
+        ],
+        "summary": "List Discrepancies",
+        "operationId": "list_discrepancies_analyses__analysis_id__discrepancies_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "analysis_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Analysis Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DiscrepancyDetailResponse"
+                  },
+                  "title": "Response List Discrepancies Analyses  Analysis Id  Discrepancies Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/matches/{reconciliation_match_id}/review": {
@@ -1033,6 +1221,11 @@
         ],
         "summary": "Review Match",
         "operationId": "review_match_matches__reconciliation_match_id__review_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "reconciliation_match_id",
@@ -1085,6 +1278,11 @@
         ],
         "summary": "Review Discrepancy",
         "operationId": "review_discrepancy_discrepancies__discrepancy_id__review_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "discrepancy_id",
@@ -1137,6 +1335,11 @@
         ],
         "summary": "Create Manual Match",
         "operationId": "create_manual_match_analyses__analysis_id__manual_match_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "analysis_id",
@@ -1189,6 +1392,11 @@
         ],
         "summary": "Generate Ai Insight",
         "operationId": "generate_ai_insight_analyses__analysis_id__ai_insights_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "analysis_id",
@@ -1262,7 +1470,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/analyses/{analysis_id}": {
@@ -1272,6 +1485,11 @@
         ],
         "summary": "Get Analysis",
         "operationId": "get_analysis_analyses__analysis_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "analysis_id",
@@ -1314,6 +1532,11 @@
         ],
         "summary": "Create New Version",
         "operationId": "create_new_version_analyses__analysis_id__versions_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "analysis_id",
@@ -1356,6 +1579,11 @@
         ],
         "summary": "Mark Processing",
         "operationId": "mark_processing_analyses__analysis_id__mark_processing_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "analysis_id",
@@ -1398,6 +1626,11 @@
         ],
         "summary": "Mark Completed",
         "operationId": "mark_completed_analyses__analysis_id__mark_completed_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "analysis_id",
@@ -1440,6 +1673,11 @@
         ],
         "summary": "Mark Failed",
         "operationId": "mark_failed_analyses__analysis_id__mark_failed_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "analysis_id",
@@ -1485,6 +1723,110 @@
         }
       }
     },
+    "/analyses/{analysis_id}/summary": {
+      "get": {
+        "tags": [
+          "analysis-results"
+        ],
+        "summary": "Get Summary",
+        "operationId": "get_summary_analyses__analysis_id__summary_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "analysis_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Analysis Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisSummaryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analyses/{analysis_id}/lead": {
+      "post": {
+        "tags": [
+          "lead-capture"
+        ],
+        "summary": "Record Lead",
+        "operationId": "record_lead_analyses__analysis_id__lead_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "analysis_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Analysis Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordLeadRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/analyses/{analysis_id}/reports": {
       "post": {
         "tags": [
@@ -1492,6 +1834,11 @@
         ],
         "summary": "Generate Report",
         "operationId": "generate_report_analyses__analysis_id__reports_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "analysis_id",
@@ -1544,6 +1891,11 @@
         ],
         "summary": "Download Report",
         "operationId": "download_report_reports__report_id__download_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "report_id",
@@ -1584,6 +1936,11 @@
         ],
         "summary": "Send Notification",
         "operationId": "send_notification_analyses__analysis_id__notifications_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "analysis_id",
@@ -1627,6 +1984,37 @@
             }
           }
         }
+      }
+    },
+    "/auth/me/branches": {
+      "get": {
+        "tags": [
+          "tenancy"
+        ],
+        "summary": "My Branches",
+        "description": "Every branch the signed-in user may act on. Owners get every branch\nof their organization (including ones created later); other roles get\ntheir explicit grants; the platform operator gets everything.",
+        "operationId": "my_branches_auth_me_branches_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MyBranchResponse"
+                  },
+                  "type": "array",
+                  "title": "Response My Branches Auth Me Branches Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/health": {
@@ -1791,6 +2179,127 @@
           "FAILED"
         ],
         "title": "AnalysisStatus"
+      },
+      "AnalysisSummaryResponse": {
+        "properties": {
+          "analysis_id": {
+            "type": "string",
+            "title": "Analysis Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AnalysisStatus"
+          },
+          "currency": {
+            "type": "string",
+            "title": "Currency"
+          },
+          "has_mixed_currencies": {
+            "type": "boolean",
+            "title": "Has Mixed Currencies"
+          },
+          "orders_processed": {
+            "type": "integer",
+            "title": "Orders Processed"
+          },
+          "matched_count": {
+            "type": "integer",
+            "title": "Matched Count"
+          },
+          "unmatched_pos_count": {
+            "type": "integer",
+            "title": "Unmatched Pos Count"
+          },
+          "unmatched_platform_count": {
+            "type": "integer",
+            "title": "Unmatched Platform Count"
+          },
+          "total_potential_revenue_leakage": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Total Potential Revenue Leakage"
+          },
+          "discrepancy_breakdown": {
+            "items": {
+              "$ref": "#/components/schemas/DiscrepancyBreakdownItem"
+            },
+            "type": "array",
+            "title": "Discrepancy Breakdown"
+          },
+          "restaurant_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restaurant Name"
+          },
+          "contact_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Email"
+          },
+          "whatsapp_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Whatsapp Number"
+          },
+          "ai_executive_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ai Executive Summary"
+          },
+          "ai_provider_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ai Provider Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "analysis_id",
+          "status",
+          "currency",
+          "has_mixed_currencies",
+          "orders_processed",
+          "matched_count",
+          "unmatched_pos_count",
+          "unmatched_platform_count",
+          "total_potential_revenue_leakage",
+          "discrepancy_breakdown",
+          "restaurant_name",
+          "contact_email",
+          "whatsapp_number",
+          "ai_executive_summary",
+          "ai_provider_name"
+        ],
+        "title": "AnalysisSummaryResponse"
       },
       "AuditLogEntryResponse": {
         "properties": {
@@ -2141,6 +2650,17 @@
           },
           "role": {
             "$ref": "#/components/schemas/UserRole"
+          },
+          "organization_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization Id"
           }
         },
         "type": "object",
@@ -2191,6 +2711,85 @@
           "installed_at"
         ],
         "title": "DeploymentInfoResponse"
+      },
+      "DiscrepancyBreakdownItem": {
+        "properties": {
+          "category": {
+            "$ref": "#/components/schemas/DiscrepancyCategory"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "total_amount": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Total Amount"
+          }
+        },
+        "type": "object",
+        "required": [
+          "category",
+          "count",
+          "total_amount"
+        ],
+        "title": "DiscrepancyBreakdownItem"
+      },
+      "DiscrepancyCategory": {
+        "type": "string",
+        "enum": [
+          "MISSING_SETTLEMENT",
+          "UNEXPECTED_SETTLEMENT",
+          "INCORRECT_COMMISSION",
+          "SETTLEMENT_AMOUNT_MISMATCH",
+          "CANCELLED_AFTER_PREPARATION"
+        ],
+        "title": "DiscrepancyCategory"
+      },
+      "DiscrepancyDetailResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "category": {
+            "$ref": "#/components/schemas/DiscrepancyCategory"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
+          "estimated_loss": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Estimated Loss"
+          },
+          "order_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Reference"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "category",
+          "severity",
+          "estimated_loss",
+          "order_reference",
+          "created_at"
+        ],
+        "title": "DiscrepancyDetailResponse"
       },
       "DiscrepancyReviewDecision": {
         "type": "string",
@@ -2425,9 +3024,50 @@
           "TOO_MANY_ROWS",
           "INVALID_NUMBER",
           "INVALID_DATE",
-          "EMPTY_REQUIRED_FIELD"
+          "EMPTY_REQUIRED_FIELD",
+          "INVALID_STATUS_VALUE",
+          "INVALID_CURRENCY_VALUE"
         ],
         "title": "IssueCode"
+      },
+      "LeadResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "analysis_id": {
+            "type": "string",
+            "title": "Analysis Id"
+          },
+          "restaurant_name": {
+            "type": "string",
+            "title": "Restaurant Name"
+          },
+          "contact_email": {
+            "type": "string",
+            "title": "Contact Email"
+          },
+          "whatsapp_number": {
+            "type": "string",
+            "title": "Whatsapp Number"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "analysis_id",
+          "restaurant_name",
+          "contact_email",
+          "whatsapp_number",
+          "created_at"
+        ],
+        "title": "LeadResponse"
       },
       "LicenseStatus": {
         "type": "string",
@@ -2670,6 +3310,39 @@
         ],
         "title": "MatchingStatus"
       },
+      "MyBranchResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "timezone": {
+            "type": "string",
+            "title": "Timezone"
+          },
+          "organization_id": {
+            "type": "string",
+            "title": "Organization Id"
+          },
+          "organization_name": {
+            "type": "string",
+            "title": "Organization Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "timezone",
+          "organization_id",
+          "organization_name"
+        ],
+        "title": "MyBranchResponse"
+      },
       "NormalizationRunResponse": {
         "properties": {
           "id": {
@@ -2879,6 +3552,29 @@
         ],
         "title": "PlatformResponse"
       },
+      "RecordLeadRequest": {
+        "properties": {
+          "restaurant_name": {
+            "type": "string",
+            "title": "Restaurant Name"
+          },
+          "contact_email": {
+            "type": "string",
+            "title": "Contact Email"
+          },
+          "whatsapp_number": {
+            "type": "string",
+            "title": "Whatsapp Number"
+          }
+        },
+        "type": "object",
+        "required": [
+          "restaurant_name",
+          "contact_email",
+          "whatsapp_number"
+        ],
+        "title": "RecordLeadRequest"
+      },
       "RecordLicenseRequest": {
         "properties": {
           "license_key": {
@@ -2980,6 +3676,16 @@
           "recipient"
         ],
         "title": "SendNotificationRequest"
+      },
+      "Severity": {
+        "type": "string",
+        "enum": [
+          "LOW",
+          "MEDIUM",
+          "HIGH",
+          "CRITICAL"
+        ],
+        "title": "Severity"
       },
       "SourceType": {
         "type": "string",
@@ -3085,6 +3791,17 @@
           "role": {
             "$ref": "#/components/schemas/UserRole"
           },
+          "organization_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization Id"
+          },
           "is_active": {
             "type": "boolean",
             "title": "Is Active"
@@ -3112,7 +3829,8 @@
           "FINANCE_MANAGER",
           "ACCOUNTANT",
           "OPS_MANAGER",
-          "AUDITOR"
+          "AUDITOR",
+          "PLATFORM_OPERATOR"
         ],
         "title": "UserRole"
       },

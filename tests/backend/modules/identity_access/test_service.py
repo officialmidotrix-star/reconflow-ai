@@ -29,11 +29,14 @@ from modules.identity_access.service import IdentityAccessService
 from modules.imports.models import Base
 
 BRANCH_ID = "branch-1"
+ORG_ID = "org-1"
+OTHER_ORG_ID = "org-2"
+OTHER_BRANCH_ID = "branch-2"
 
 # "branches" is now a real table (Organization & Branch Management) -
 # importing its model registers it, replacing the stand-in this file
 # used before that module existed.
-from modules.organizations.models import Branch  # noqa: E402,F401
+from modules.organizations.models import Branch, Organization  # noqa: E402,F401
 
 
 @pytest.fixture()
@@ -41,6 +44,13 @@ def db(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path}/test.db")
     Base.metadata.create_all(engine)
     with Session(engine) as session:
+        session.add_all([
+            Organization(id=ORG_ID, legal_name="Acme", default_currency="SAR"),
+            Organization(id=OTHER_ORG_ID, legal_name="Other Co", default_currency="AED"),
+            Branch(id=BRANCH_ID, organization_id=ORG_ID, name="Downtown", timezone="Asia/Riyadh"),
+            Branch(id=OTHER_BRANCH_ID, organization_id=OTHER_ORG_ID, name="Marina", timezone="Asia/Dubai"),
+        ])
+        session.commit()
         yield session
 
 
@@ -55,7 +65,9 @@ def service(db, audit_logger):
 
 
 def _create_user(service, email="owner@example.com", password="correct horse battery staple"):
-    return service.create_user(email=email, password=password, role=UserRole.OWNER)
+    return service.create_user(
+        email=email, password=password, role=UserRole.OWNER, organization_id=ORG_ID
+    )
 
 
 class TestCreateUser:

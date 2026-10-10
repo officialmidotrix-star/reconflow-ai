@@ -16,8 +16,26 @@ from cryptography.fernet import Fernet
 logger = logging.getLogger("reconflow.bootstrap.config")
 
 
+def normalize_database_url(url: str) -> str:
+    """Pin plain PostgreSQL URLs to the psycopg2 driver this project ships.
+
+    A bare `postgresql://` (or Heroku/Render-style `postgres://`) URL lets
+    SQLAlchemy choose the driver: 2.0.x picks psycopg2, 2.1.x picks
+    psycopg v3 - which requirements.txt does not install. Without this, an
+    unpinned dependency upgrade on a redeploy would break the database
+    connection with ModuleNotFoundError. A URL that names a driver
+    explicitly (postgresql+psycopg://...) is left alone.
+    """
+    for prefix in ("postgres://", "postgresql://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg2://" + url[len(prefix):]
+    return url
+
+
 def get_database_url() -> str:
-    return os.environ.get("RECONFLOW_DATABASE_URL", "sqlite:///./reconflow.db")
+    return normalize_database_url(
+        os.environ.get("RECONFLOW_DATABASE_URL", "sqlite:///./reconflow.db")
+    )
 
 
 def get_storage_dir() -> str:

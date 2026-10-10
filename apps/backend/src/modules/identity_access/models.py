@@ -14,7 +14,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Enum, ForeignKey, String
+from sqlalchemy import Boolean, CheckConstraint, Enum, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.base import Base
@@ -27,6 +27,12 @@ class UserRole(str, enum.Enum):
     ACCOUNTANT = "ACCOUNTANT"
     OPS_MANAGER = "OPS_MANAGER"
     AUDITOR = "AUDITOR"  # read-only, per the Phase 2 persona list
+    # Cross-organization operator of the platform (onboards clients, runs
+    # analyses on their behalf). Never assignable over HTTP - created only
+    # by bootstrap/create_operator.py or the startup seed - and the CHECK
+    # constraint on User makes it structurally impossible for a user that
+    # belongs to a client organization to hold it.
+    PLATFORM_OPERATOR = "PLATFORM_OPERATOR"
 
 
 def _uuid() -> str:
@@ -39,11 +45,23 @@ def _utcnow() -> datetime:
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(
+            "(role = 'PLATFORM_OPERATOR' AND organization_id IS NULL) "
+            "OR (role <> 'PLATFORM_OPERATOR' AND organization_id IS NOT NULL)",
+            name="ck_users_operator_org",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[UserRole] = mapped_column(Enum(UserRole), nullable=False)
+    # NULL only for PLATFORM_OPERATOR (enforced by ck_users_operator_org);
+    # every client user belongs to exactly one organization.
+    organization_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("organizations.id"), nullable=True, index=True
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_utcnow)
 
