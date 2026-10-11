@@ -29,7 +29,8 @@ from sqlalchemy.orm import Session
 
 from modules.ai_insights.models import AIInsight
 from modules.analysis_orchestration.models import Analysis
-from modules.discrepancies.models import Discrepancy
+from modules.discrepancies.models import Discrepancy, DiscrepancyRun, Treatment
+from modules.financial_comparison.models import ComparisonRun
 from modules.imports.models import SourceType
 from modules.lead_capture.models import AnalysisLead
 from modules.matching.models import MatchingRun, ReconciliationMatch
@@ -37,7 +38,13 @@ from modules.normalization.models import Transaction
 from modules.organizations.models import Branch, Organization
 
 from .exceptions import AnalysisNotFoundError
-from .schemas import AnalysisSummaryResponse, DiscrepancyBreakdownItem, DiscrepancyDetailResponse
+from .schemas import (
+    AnalysisSummaryResponse,
+    DiscrepancyBreakdownItem,
+    DiscrepancyDetailResponse,
+    SummaryGroup,
+    SummaryGroups,
+)
 
 
 class AnalysisResultsService:
@@ -66,8 +73,16 @@ class AnalysisResultsService:
         discrepancies = self._db.execute(
             select(Discrepancy).where(Discrepancy.analysis_id == analysis_id)
         ).scalars().all()
-        total_leakage = sum((d.estimated_loss for d in discrepancies), Decimal("0"))
+        groups = self._groups(discrepancies)
         breakdown = self._group_by_category(discrepancies)
+        latest_comparison = self._db.execute(
+            select(ComparisonRun).where(ComparisonRun.analysis_id == analysis_id)
+            .order_by(ComparisonRun.checked_at.desc()).limit(1)
+        ).scalar_one_or_none()
+        latest_discrepancy_run = self._db.execute(
+            select(DiscrepancyRun).where(DiscrepancyRun.analysis_id == analysis_id)
+            .order_by(DiscrepancyRun.checked_at.desc()).limit(1)
+        ).scalar_one_or_none()
 
         latest_insight = self._db.execute(
             select(AIInsight)
@@ -96,8 +111,16 @@ class AnalysisResultsService:
             unmatched_platform_count=(
                 latest_matching_run.unmatched_platform_count if latest_matching_run else 0
             ),
-            total_potential_revenue_leakage=total_leakage,
+            total_recoverable_amount=groups.recoverable.amount,
+            total_potential_revenue_leakage=groups.recoverable.amount,
+            groups=groups,
             discrepancy_breakdown=breakdown,
+            orders_not_checked_no_contract=(
+                latest_comparison.skipped_no_contract_count if latest_comparison else 0
+            ),
+            excluded_refund_void_count=(
+                latest_discrepancy_run.excluded_refund_void_count if latest_discrepancy_run else 0
+            ),
             ai_executive_summary=latest_insight.executive_summary if latest_insight else None,
             ai_provider_name=latest_insight.provider_name if latest_insight else None,
         )
@@ -115,7 +138,10 @@ class AnalysisResultsService:
                 category=d.category,
                 severity=d.severity,
                 estimated_loss=d.estimated_loss,
-                order_reference=self._order_reference_for(d),
+                treatment=d.treatment,
+                direction=d.direction,
+                claimable_amount=d.claimable_amount,
+                order_reference=d.order_reference or self._order_reference_for(d),
                 created_at=d.created_at,
             )
             for d in discrepancies
@@ -189,14 +215,43 @@ class AnalysisResultsService:
         transaction = self._db.get(Transaction, transaction_id)
         return transaction.external_reference if transaction else None
 
+    def _groups(self, discrepancies: list[Discrepancy]) -> SummaryGroups:
+        count: dict[Treatment, int] = defaultdict(int)
+        amount: dict[Treatment, Decimal] = defaultdict(lambda: Decimal("0"))
+        for d in discrepancies:
+            count[d.treatment] += 1
+            # Recoverable is summed NET (claimable_amount); every other group is
+            # shown at the gross amount involved, because nothing is claimable yet.
+            amount[d.treatment] += (
+                (d.claimable_amount or Decimal("0")) if d.treatment == Treatment.RECOVERABLE else d.estimated_loss
+            )
+
+        def group(t: Treatment) -> SummaryGroup:
+            return SummaryGroup(count=count[t], amount=amount[t])
+
+        return SummaryGroups(
+            recoverable=group(Treatment.RECOVERABLE),
+            needs_confirmation=group(Treatment.NEEDS_CONFIRMATION),
+            needs_contract=group(Treatment.NEEDS_CONTRACT),
+            to_verify=group(Treatment.TO_VERIFY),
+            not_claimable=group(Treatment.NOT_CLAIMABLE),
+            needs_rerun=group(Treatment.NEEDS_RERUN),
+        )
+
     def _group_by_category(self, discrepancies: list[Discrepancy]) -> list[DiscrepancyBreakdownItem]:
         counts: dict = defaultdict(int)
         totals: dict = defaultdict(lambda: Decimal("0"))
+        recoverable: dict = defaultdict(lambda: Decimal("0"))
         for d in discrepancies:
             counts[d.category] += 1
             totals[d.category] += d.estimated_loss
+            if d.treatment == Treatment.RECOVERABLE:
+                recoverable[d.category] += d.claimable_amount or Decimal("0")
         return [
-            DiscrepancyBreakdownItem(category=category, count=counts[category], total_amount=totals[category])
+            DiscrepancyBreakdownItem(
+                category=category, count=counts[category], total_amount=totals[category],
+                recoverable_amount=recoverable[category],
+            )
             for category in counts
         ]
 

@@ -25,7 +25,6 @@ import logging
 from fastapi import Depends, FastAPI
 from sqlalchemy.orm import Session
 
-from storage.file_storage import LocalEncryptedFileStorage
 
 from .access import (
     ScopedAuditLogService,
@@ -38,7 +37,8 @@ from .access import (
     current_user_id,
     enforce_policy,
 )
-from .config import get_encryption_key, get_storage_dir, has_anthropic_credentials, has_smtp_credentials
+from .config import has_anthropic_credentials, has_smtp_credentials
+from .storage_factory import build_storage
 from .database import get_db
 from . import tenancy_routes
 
@@ -93,7 +93,7 @@ logger = logging.getLogger("reconflow.bootstrap.wiring")
 
 # -- singletons that don't need a per-request db session ---------------
 
-_storage = LocalEncryptedFileStorage(get_storage_dir(), get_encryption_key())
+_storage = build_storage()
 
 if has_anthropic_credentials():
     _ai_provider = AnthropicAIProvider()
@@ -182,7 +182,9 @@ def _comparison_service(db: Session = Depends(get_db)) -> ComparisonService:
 
 
 def _discrepancy_service(db: Session = Depends(get_db)) -> DiscrepancyService:
-    return DiscrepancyService(db=db, audit_logger=_audit_logger(db))
+    return DiscrepancyService(
+        db=db, audit_logger=_audit_logger(db), contract_lookup=_contract_lookup(db)
+    )
 
 
 def _manual_review_service(db: Session = Depends(get_db)) -> ManualReviewService:
@@ -299,6 +301,7 @@ def register_all(app: FastAPI) -> None:
     access.POLICIES is denied."""
     for router_module in _ALL_ROUTERS:
         app.include_router(router_module.router, dependencies=[Depends(enforce_policy)])
+    app.include_router(discrepancies_router.cancellation_router, dependencies=[Depends(enforce_policy)])
 
     for placeholder, real in _SERVICE_OVERRIDES.items():
         app.dependency_overrides[placeholder] = real

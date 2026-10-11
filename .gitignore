@@ -1,7 +1,42 @@
+# --- Python
 __pycache__/
 *.pyc
+*.pyo
 .pytest_cache/
-*.db
-reconflow_files/
-.env
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+.venv-rehearsal/
 *.egg-info/
+
+# --- Node / Next.js / Vite (this file is safe to copy into the frontend and website repos)
+node_modules/
+.next/
+out/
+dist/
+build/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- Secrets and local settings: never commit these
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- Local data and working files
+*.db
+*.sqlite3
+reconflow_files/
+backups/
+.rehearsal_passed
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

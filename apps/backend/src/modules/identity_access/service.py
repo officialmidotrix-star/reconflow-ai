@@ -22,11 +22,13 @@ from modules.organizations.models import Branch, Organization
 from .dependencies import AuditLogger
 from .exceptions import (
     CrossOrganizationError,
+    CurrentPasswordIncorrectError,
     EmailAlreadyExistsError,
     IdentityPersistError,
     InsufficientRoleError,
     InvalidUserScopeError,
     OperatorRoleNotAssignableError,
+    PasswordUnchangedError,
     InvalidCredentialsError,
     InvalidSessionError,
     UserNotFoundError,
@@ -155,6 +157,73 @@ class IdentityAccessService:
             event="user_logged_in", user_id=user.id, analysis_id=None, metadata={}
         )
         return raw_token, user
+
+    def list_users(self, *, actor_id: str) -> list[User]:
+        """The platform operator sees every user; an Owner sees the users of
+        their own organization; nobody else lists users."""
+        actor = self._db.get(User, actor_id)
+        if actor is None or not actor.is_active:
+            raise InsufficientRoleError("You are not allowed to list users.")
+        query = select(User).order_by(User.email)
+        if actor.role == UserRole.OWNER:
+            query = query.where(User.organization_id == actor.organization_id)
+        elif actor.role != UserRole.PLATFORM_OPERATOR:
+            raise InsufficientRoleError("Only an Owner or the platform operator can list users.")
+        return list(self._db.execute(query).scalars().all())
+
+    def change_password(
+        self,
+        *,
+        actor_id: str,
+        target_user_id: str,
+        new_password: str,
+        current_password: str | None = None,
+    ) -> None:
+        """Change (own) or reset (someone else's) a password.
+
+        Who may do what: anyone may change their own password given the
+        correct current one; the platform operator may reset anyone's; an
+        Owner may reset the password of a user in their own organization
+        (never an operator, never another organization). Everything else
+        answers the same generic 'not found' as a user that does not exist.
+
+        Every session of the target is revoked, so a leaked token or an
+        old password stops working at once; the user must sign in again.
+        """
+        actor = self._db.get(User, actor_id)
+        target = self._db.get(User, target_user_id)
+        if actor is None or not actor.is_active or target is None:
+            raise CrossOrganizationError("We couldn't find that user.")
+
+        if actor.id == target.id:
+            if current_password is None or not verify_password(current_password, target.password_hash):
+                raise CurrentPasswordIncorrectError("The current password is incorrect.")
+        elif actor.role == UserRole.PLATFORM_OPERATOR:
+            pass
+        elif (
+            actor.role == UserRole.OWNER
+            and target.role != UserRole.PLATFORM_OPERATOR
+            and target.organization_id == actor.organization_id
+        ):
+            pass
+        else:
+            raise CrossOrganizationError("We couldn't find that user.")
+
+        if verify_password(new_password, target.password_hash):
+            raise PasswordUnchangedError("The new password must be different from the current one.")
+
+        target.password_hash = hash_password(new_password)
+        now = _utcnow()
+        for session in self._db.execute(
+            select(Session).where(Session.user_id == target.id, Session.revoked_at.is_(None))
+        ).scalars():
+            session.revoked_at = now
+        self._commit()
+
+        self._audit_logger.log(
+            event="password_changed", user_id=actor.id, analysis_id=None,
+            metadata={"target_user_id": target.id, "self_service": actor.id == target.id},
+        )
 
     def get_current_user(self, *, token: str) -> User:
         session = self._db.execute(

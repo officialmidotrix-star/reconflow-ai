@@ -50,7 +50,7 @@ def _to_response(service: DeploymentService, info) -> DeploymentInfoResponse:
 
 
 @router.get("/info", response_model=DeploymentInfoResponse)
-async def get_deployment_info(
+def get_deployment_info(
     service: DeploymentService = Depends(get_deployment_service),
 ) -> DeploymentInfoResponse:
     info = service.get_deployment_info()
@@ -58,7 +58,7 @@ async def get_deployment_info(
 
 
 @router.post("/license", response_model=DeploymentInfoResponse)
-async def record_license(
+def record_license(
     body: RecordLicenseRequest,
     requested_by: str = Depends(get_current_user_id),
     service: DeploymentService = Depends(get_deployment_service),
@@ -75,7 +75,7 @@ async def record_license(
 
 
 @router.post("/updates", response_model=UpdateEventResponse, status_code=201)
-async def record_update(
+def record_update(
     body: RecordUpdateRequest,
     requested_by: str = Depends(get_current_user_id),
     service: DeploymentService = Depends(get_deployment_service),
@@ -92,7 +92,7 @@ async def record_update(
 
 
 @router.get("/updates", response_model=list[UpdateEventResponse])
-async def list_updates(
+def list_updates(
     service: DeploymentService = Depends(get_deployment_service),
 ) -> list[UpdateEventResponse]:
     return [UpdateEventResponse.model_validate(e) for e in service.list_update_history()]

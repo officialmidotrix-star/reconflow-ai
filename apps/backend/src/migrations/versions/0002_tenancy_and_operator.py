@@ -21,6 +21,12 @@ What this does to an EXISTING single-organization database:
 Every pre-condition is checked BEFORE any change is made. Optional:
     -x org_id=<uuid>   choose the organization when several exist (not
                        expected: the old code allowed exactly one).
+    -x operator_missing_ok=1
+                       with -x operator_email=...: the named account does not
+                       exist yet and WILL be created by the application's
+                       start-up seed right after this migration (used by the
+                       deploy-time migration, which only allows this when the
+                       seed password is configured). Nobody is promoted.
 
 Frozen: no application imports.
 """
@@ -53,6 +59,7 @@ def _preflight(bind) -> tuple[str | None, str | None]:
     MigrationRefused with an explicit message if anything is ambiguous."""
     x = _x()
     operator_email = x.get("operator_email")
+    operator_will_be_created = x.get("operator_missing_ok") == "1" and bool(operator_email)
     users = bind.execute(sa.text("SELECT id, email, CAST(role AS VARCHAR) AS role FROM users")).fetchall()
     orgs = [r[0] for r in bind.execute(sa.text("SELECT id FROM organizations")).fetchall()]
     existing_operators = [u for u in users if u.role == OPERATOR]
@@ -62,12 +69,14 @@ def _preflight(bind) -> tuple[str | None, str | None]:
 
     if operator_email:
         match = [u for u in users if u.email == operator_email]
-        if not match:
+        if not match and operator_will_be_created:
+            operator_email = None  # nothing to promote; the seed creates it
+        elif not match:
             raise MigrationRefused(
                 f"-x operator_email={operator_email!r} matches no existing user. Existing emails: "
                 + ", ".join(sorted(u.email for u in users))
             )
-    elif not existing_operators:
+    elif not existing_operators and not operator_will_be_created:
         raise MigrationRefused(
             "This database has users but no platform operator. Re-run with "
             "`alembic -x operator_email=<email of the account that will become the operator> upgrade head`. "

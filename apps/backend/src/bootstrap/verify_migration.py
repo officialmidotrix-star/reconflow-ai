@@ -45,11 +45,18 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import IntegrityError
 
+from bootstrap.baseline_check import diff_shapes, schema_shape
 from bootstrap.config import normalize_database_url
 
 SRC_DIR = Path(__file__).resolve().parents[1]
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "", None}  # "" / None = unix socket
 SKIP_HASH = {"alembic_version", "users", "audit_log_entries"}
+# Columns that migrations add to existing tables: excluded from the content hash so that
+# "unchanged" means "the data that was there before is byte-identical".
+NEW_COLUMNS = {
+    "discrepancies": ["treatment", "direction", "claimable_amount", "order_reference"],
+    "discrepancy_runs": ["excluded_refund_void_count"],
+}
 
 
 class Failed(Exception):
@@ -90,8 +97,13 @@ def snapshot(engine: Engine) -> dict:
         for t in tables:
             snap["counts"][t] = c.execute(text(f'SELECT count(*) FROM "{t}"')).scalar_one()
             if t not in SKIP_HASH:
+                drop = "{" + ",".join(NEW_COLUMNS.get(t, [])) + "}"
                 snap["hashes"][t] = c.execute(
-                    text(f'SELECT md5(COALESCE(string_agg(x::text, \'|\' ORDER BY x::text), \'\')) FROM "{t}" x')
+                    text(
+                        "SELECT md5(COALESCE(string_agg((to_jsonb(x) - CAST(:drop AS text[]))::text, '|' "
+                        f"ORDER BY (to_jsonb(x) - CAST(:drop AS text[]))::text), '')) FROM \"{t}\" x"
+                    ),
+                    {"drop": drop},
                 ).scalar_one()
         snap["users_core"] = c.execute(
             text("SELECT md5(COALESCE(string_agg(id || email || password_hash || is_active::text, '|' ORDER BY id), '')) FROM users")
@@ -106,47 +118,6 @@ def snapshot(engine: Engine) -> dict:
             tuple(r) for r in c.execute(text("SELECT email, CAST(role AS VARCHAR) FROM users ORDER BY email")).fetchall()
         ]
     return snap
-
-
-def schema_shape(engine: Engine) -> dict:
-    insp = inspect(engine)
-    shape = {}
-    for t in sorted(insp.get_table_names()):
-        if t == "alembic_version":
-            continue
-        cols = {
-            c["name"]: (type(c["type"]).__name__, getattr(c["type"], "length", None), c["nullable"],
-                        tuple(getattr(c["type"], "enums", None) or ()))
-            for c in insp.get_columns(t)
-        }
-        idx = {i["name"]: tuple(i["column_names"]) for i in insp.get_indexes(t)}
-        fks = sorted(
-            (tuple(f["constrained_columns"]), f["referred_table"], tuple(f["referred_columns"]))
-            for f in insp.get_foreign_keys(t)
-        )
-        shape[t] = {"cols": cols, "idx": idx, "fks": fks}
-    return shape
-
-
-def diff_shapes(real: dict, ref: dict) -> list[str]:
-    out = []
-    for t in sorted(set(ref) - set(real)):
-        out.append(f"table missing in your database: {t}")
-    for t in sorted(set(real) - set(ref)):
-        out.append(f"extra table in your database: {t}")
-    for t in sorted(set(real) & set(ref)):
-        for c in sorted(set(ref[t]["cols"]) - set(real[t]["cols"])):
-            out.append(f"{t}.{c}: column missing in your database")
-        for c in sorted(set(real[t]["cols"]) - set(ref[t]["cols"])):
-            out.append(f"{t}.{c}: extra column in your database")
-        for c in sorted(set(real[t]["cols"]) & set(ref[t]["cols"])):
-            if real[t]["cols"][c] != ref[t]["cols"][c]:
-                out.append(f"{t}.{c}: differs - yours {real[t]['cols'][c]} vs baseline {ref[t]['cols'][c]}")
-        for i in sorted(set(ref[t]["idx"]) - set(real[t]["idx"])):
-            out.append(f"{t}: index {i} missing in your database")
-        if real[t]["fks"] != ref[t]["fks"]:
-            out.append(f"{t}: foreign keys differ - yours {real[t]['fks']} vs baseline {ref[t]['fks']}")
-    return out
 
 
 # -- main --------------------------------------------------------------------
@@ -216,9 +187,12 @@ def main(argv: list[str] | None = None) -> int:
 
         step("4. Assertions after upgrade")
         after = snapshot(engine)
-        check(after["counts"].keys() == before["counts"].keys(), "no tables added or lost")
+        check(set(before["counts"]) <= set(after["counts"]), "no existing table was lost")
+        added = sorted(set(after["counts"]) - set(before["counts"]))
+        check(all(after["counts"][t] == 0 for t in added),
+              f"new tables start empty ({', '.join(added) or 'none'})")
         check(all(after["counts"][t] == before["counts"][t] for t in before["counts"]),
-              "every table has exactly the same number of rows")
+              "every existing table has exactly the same number of rows")
         changed = [t for t in before["hashes"] if before["hashes"][t] != after["hashes"][t]]
         check(not changed, f"content of all {len(before['hashes'])} untouched tables is byte-identical")
         check(before["users_core"] == after["users_core"], "users: ids, emails, password hashes, active flags unchanged")

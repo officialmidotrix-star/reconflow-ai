@@ -96,6 +96,12 @@ def _old_world(url: str, *, orgs: int = 1, with_operator_candidate: bool = True)
     return ids
 
 
+def _head() -> str:
+    from alembic.script import ScriptDirectory
+
+    return ScriptDirectory.from_config(_alembic_cfg()).get_current_head()
+
+
 def _rows(url: str, sql: str):
     e = _engine(url)
     with e.connect() as c:
@@ -124,7 +130,7 @@ class TestFreshDatabase:
 
     def test_fresh_database_needs_no_operator_argument(self, db_url):
         command.upgrade(_alembic_cfg(), "head")  # no users -> nothing to promote, no refusal
-        assert _rows(db_url, "SELECT version_num FROM alembic_version") == [("0002",)]
+        assert _rows(db_url, "SELECT version_num FROM alembic_version") == [(_head(),)]
 
     def test_check_constraint_rejects_a_client_operator_and_an_org_less_client(self, db_url):
         command.upgrade(_alembic_cfg(), "head")
@@ -205,7 +211,36 @@ class TestExistingDatabase:
         assert _rows(db_url, "SELECT count(*) FROM audit_log_entries") == [(3,)]
         # and it can go forward again
         command.upgrade(_alembic_cfg({"operator_email": "owner@x.test"}), "head")
-        assert _rows(db_url, "SELECT version_num FROM alembic_version") == [("0002",)]
+        assert _rows(db_url, "SELECT version_num FROM alembic_version") == [(_head(),)]
+
+    def test_numbers_migration_labels_old_discrepancies_honestly_and_keeps_the_data(self, db_url):
+        """0003: rows written before the new rules are never guessed at."""
+        _old_world(db_url)
+        command.upgrade(_alembic_cfg({"operator_email": "owner@x.test"}), "0002")
+        e = _engine(db_url)
+        t = "2026-03-01 10:00:00"
+        with e.begin() as c:
+            c.execute(text("INSERT INTO reconciliation_matches (id, analysis_id, created_at) VALUES ('m1','an-1',:t)"), {"t": t})
+            for did, cat in (("d1", "MISSING_SETTLEMENT"), ("d2", "UNEXPECTED_SETTLEMENT"),
+                             ("d3", "CANCELLED_AFTER_PREPARATION"), ("d4", "SETTLEMENT_AMOUNT_MISMATCH")):
+                c.execute(text("INSERT INTO discrepancies (id, analysis_id, reconciliation_match_id, category, severity, estimated_loss, created_at) "
+                               "VALUES (:i,'an-1','m1',:c,'LOW',12.50,:t)"), {"i": did, "c": cat, "t": t})
+            c.execute(text("INSERT INTO discrepancy_runs (id, analysis_id, status, total_count, critical_count, high_count, medium_count, low_count, checked_at) "
+                           "VALUES ('r1','an-1','COMPLETED',4,0,0,0,4,:t)"), {"t": t})
+        e.dispose()
+
+        command.upgrade(_alembic_cfg(), "head")
+        rows = {r[0]: r[1:] for r in _rows(db_url, "SELECT id, treatment, direction, claimable_amount, order_reference, estimated_loss FROM discrepancies")}
+        assert rows["d1"][0] == "NEEDS_RERUN" and rows["d4"][0] == "NEEDS_RERUN"
+        assert rows["d2"][0] == "TO_VERIFY" and rows["d3"][0] == "NEEDS_CONFIRMATION"
+        assert all(v[1] is None and v[2] is None and v[3] is None for v in rows.values())  # nothing invented
+        assert all(float(v[4]) == 12.5 for v in rows.values())                              # amounts untouched
+        assert _rows(db_url, "SELECT excluded_refund_void_count FROM discrepancy_runs") == [(0,)]
+        assert _rows(db_url, "SELECT count(*) FROM cancellation_confirmations") == [(0,)]
+        # and it reverses cleanly
+        command.downgrade(_alembic_cfg(), "0002")
+        assert "treatment" not in {c["name"] for c in inspect(_engine(db_url)).get_columns("discrepancies")}
+        assert _rows(db_url, "SELECT count(*) FROM discrepancies") == [(4,)]
 
     def test_the_baseline_itself_can_never_be_downgraded(self, db_url):
         command.upgrade(_alembic_cfg(), "0001")

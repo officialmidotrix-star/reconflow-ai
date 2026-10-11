@@ -1,88 +1,117 @@
-# Batch 1 runbook — tenancy, access control, migrations
+# ADVANCED — rehearse the migration on a copy of the database (use this once the data is real)
 
-Nothing here has been run against production. Order is strict: **A → B → (your go) → C**.
-Commands are written for Git Bash on Windows; `<angle brackets>` are values you fill in.
+> **For today (test data only) you do not need this file.** The simple path is `docs/CUTOVER_ON_RENDER.md`:
+> the migration runs on Render by itself when the new version starts. Come back here when the database holds
+> real client data: a rehearsal on a copy, a downloaded backup and a paused n8n are then worth the half hour.
 
-## A. Five minutes of looking at live Render (read-only)
+(The scripts below need a GitHub Codespace or a PC with Python and PostgreSQL; the cutover script in Part 3
+is the manual alternative to the deploy-time migration.)
 
-1. **Postgres:** instance type, **expiry date** (free instances expire), and the major version (use the same one locally in B).
-2. **Web service:** plan/instance type; whether a **persistent disk** is attached (without one, uploaded files and generated reports vanish on every redeploy).
-3. **Environment variables:**
-   - `RECONFLOW_ENCRYPTION_KEY` **must be set and never change.** The code (`bootstrap/config.py`) generates a throwaway key when it is missing, so every restart would make previously stored files unreadable.
-   - `RECONFLOW_DATABASE_URL` — set. (A plain `postgresql://` URL is now pinned to the psycopg2 driver in code; before this change an unpinned dependency upgrade could have broken the connection.)
-   - `RECONFLOW_ALLOWED_ORIGINS` — must contain your frontend's origin once it leaves localhost.
-   - `RECONFLOW_SEED_OWNER_EMAIL/PASSWORD` — no longer used (logged as a warning). Remove them when convenient.
-4. Is the hole open today? This probe **creates nothing**: it sends an empty body. The old code has no
-   authentication on this route, so it validates the body and answers `422`; closed code answers `401`.
+Your admin login (the operator account): **official.midotrix@gmail.com**.
+`<…>` = something you fill in. "Terminal" = the terminal inside the Codespace (Part 2A) or Git Bash (Part 2B).
+
+**Nothing in this guide touches production until Part 3, step 2.** Parts 1 and 2 only *read* from production.
+
+| Part | What | Time | Production touched? |
+|---|---|---|---|
+| 1 | Look at Render, check the hole is open | 10 min | no (read-only) |
+| 2 | Rehearsal on a copy | 30 min | no |
+| 3 | Cutover | 20 min | **yes** |
+| 4 | Rotate two secrets | 20 min | yes (passwords only) |
+| 5 | If something goes wrong | — | — |
+
+## Which way to run the rehearsal — my recommendation: A (a GitHub Codespace)
+
+| | What it is | Installs on your PC | Verdict |
+|---|---|---|---|
+| **A. Codespace** | A temporary Linux computer in your browser, opened on the repo. One command runs everything. | **none** | **Recommended.** I tested these exact scripts. GitHub gives personal accounts 120 core-hours/month free (≈60 hours on the smallest machine). Catch: repos owned by an *organization* get no free allowance — open github.com/officialmidotrix-star: if it says "Organization", use B. |
+| B. Windows + Git Bash | Install Python and PostgreSQL on your PC, then type the steps yourself. | 2 programs | Works, more steps, **I have not run it on Windows**. |
+| C. Temporary Render database | Render can clone a *paid* database by point-in-time recovery. | none | **Not recommended.** You would still need somewhere to run the check, and my safety guard only allows a local database, so a remote copy cannot be used with it. |
+
+---
+
+## Part 1 — Look before you touch (10 minutes, read-only)
+
+1. **Render dashboard → your Postgres database → Info.** Write down: plan (Free or paid), PostgreSQL version, expiry date (free databases expire).
+2. **Render dashboard → your web service → Environment.** Confirm `RECONFLOW_ENCRYPTION_KEY` exists. (If it is missing the app invents a new key on every restart and old uploaded files become unreadable — tell me if it is missing.) Note whether a *Disk* is attached.
+3. **Is the hole open today?** Run in Git Bash, any folder (this creates nothing):
    ```bash
-   curl -s -o /dev/null -w "%{http_code}\n" -X POST https://<your-api>.onrender.com/users \
-     -H 'Content-Type: application/json' -d '{}'
+   curl -s -o /dev/null -w "%{http_code}\n" -X POST https://<your-api>.onrender.com/users -H 'Content-Type: application/json' -d '{}'
    ```
-   `422` = anyone on the internet can still create accounts (the Batch 1 deploy closes it); `401` = already closed.
+   `422` = anyone can still create accounts (Part 3 closes it). `401` = already closed.
+4. **Copy the database's External Database URL:** Render → your Postgres → **Connect** → **External** → copy. It contains the password: do not paste it in chat or in files. You will paste it into a hidden prompt.
 
-## B. Rehearsal on a restored copy (this is the step that gates production)
+## Part 2A — Rehearsal in a Codespace (recommended)
 
-1. **Dump production** (read-only; use the *external* connection string from Render's Postgres page):
+1. On GitHub open the backend repo (`officialmidotrix-star/reconflow-ai`). Click the branch dropdown, choose **`batch1-security-tenancy`**. Click the green **Code** button → **Codespaces** tab → **Create codespace on batch1-security-tenancy**. Wait until an editor opens in your browser (1–2 minutes).
+2. In the editor: menu **Terminal → New Terminal**. It opens in the repo's top folder — leave it there.
+3. Run (folder: the terminal's default, the repo top folder):
    ```bash
-   pg_dump "<external-database-url>" --no-owner --format=plain -f prod_dump.sql
+   bash scripts/rehearse.sh official.midotrix@gmail.com
    ```
-2. **Restore into a throwaway local Postgres** (same major version as production):
+   Paste the External Database URL when asked (nothing shows while you type) and press Enter. It takes 5–10 minutes: it copies the database (read-only), installs a temporary PostgreSQL inside the Codespace, and runs every check.
+4. **Success** ends with a green **REHEARSAL PASSED**. **Failure** ends with a red **STOPPED** and `FAIL` lines. Either way production is untouched. If it failed, copy the `FAIL` lines to me.
+5. Tell me the result. **Keep this Codespace open** (or reopen it from github.com/codespaces): Part 3 needs it.
+
+## Part 2B — Rehearsal on Windows with Git Bash (only if you cannot use A)
+
+Install once: **Python 3.12** from python.org (tick "Add python.exe to PATH") and **PostgreSQL** from postgresql.org/download/windows — use the **same major version as Render** (Part 1 step 1); remember the `postgres` password you set; keep "Command Line Tools". Then, in **Git Bash**, folder = the repo top folder (`…\reconflow-ai`):
+
+1. `git fetch origin && git checkout batch1-security-tenancy`
+2. `export PATH="$PATH:/c/Program Files/PostgreSQL/<version>/bin"` (replace `<version>`, e.g. `16`)
+3. `python -m venv .venv-rehearsal && source .venv-rehearsal/Scripts/activate && pip install -r apps/backend/requirements.txt`
+4. `psql -h localhost -U postgres -c "CREATE DATABASE rehearsal_copy"` (asks for the postgres password)
+5. `pg_dump '<External Database URL>' --no-owner --no-privileges -f prod_dump.sql`
+6. `psql -v ON_ERROR_STOP=1 -q 'postgresql://postgres:<password>@localhost:5432/rehearsal_copy' -f prod_dump.sql`
+7. Folder `apps/backend/src`:
+   `python -m bootstrap.verify_migration --url 'postgresql://postgres:<password>@localhost:5432/rehearsal_copy' --operator-email official.midotrix@gmail.com --confirm-copy`
+8. Must end with `ALL CHECKS PASSED`. Then delete `prod_dump.sql` (it contains your data). For the cutover use the commands in Part 3B.
+
+## Part 3 — Cutover (only after the rehearsal passed AND you told me to go)
+
+1. **Pause n8n:** open the ReconFlow workflow in n8n and switch it to inactive.
+2. **Migrate production.** In the same Codespace terminal (folder: repo top folder):
    ```bash
-   docker run --name rf-copy -e POSTGRES_PASSWORD=rf -p 55432:5432 -d postgres:16
-   docker exec -it rf-copy psql -U postgres -c "CREATE DATABASE restored;"
-   docker exec -i rf-copy psql -U postgres -d restored < prod_dump.sql
+   bash scripts/cutover.sh official.midotrix@gmail.com
    ```
-3. **Run the rehearsal** from the repo, pointing it at the *copy*:
+   Paste the **production** External Database URL (hidden), then type exactly `MIGRATE PRODUCTION`. The script refuses unless the rehearsal passed in this Codespace, for this email, for this same database, in the last 48 hours. It then makes a backup, migrates, and checks. Success ends with a green **DATABASE MIGRATED**.
+3. **Keep the backup:** left panel → folder `backups` → right-click the `.dump` file → **Download**.
+4. **Deploy the new code now** (the old code is still running until you do; do it within a few minutes of step 2): on GitHub → **Pull requests → New pull request** → base `main`, compare `batch1-security-tenancy` → **Create pull request → Merge**. Render redeploys automatically; watch Render → your web service → **Events** until it says live. (If auto-deploy is off: **Manual Deploy → Deploy latest commit**.) If the deploy fails with "Database schema is at revision…", step 2 did not finish — tell me.
+5. **Smoke test** (Git Bash or the Codespace terminal, any folder). Replace the address:
    ```bash
-   cd apps/backend && pip install -r requirements.txt && cd src
-   python -m bootstrap.verify_migration \
-     --url postgresql://postgres:rf@localhost:55432/restored \
-     --operator-email <the email you log in with as yourself> \
-     --confirm-copy
+   API=https://<your-api>.onrender.com
+   curl -s -o /dev/null -w "create user, no login  -> %{http_code} (want 401)\n" -X POST $API/users -H 'Content-Type: application/json' -d '{}'
+   curl -s -o /dev/null -w "read analysis, no login -> %{http_code} (want 401)\n" $API/analyses/anything
+   read -rsp "Your admin password: " PW; echo
+   curl -s -X POST $API/auth/login -H 'Content-Type: application/json' -d "{\"email\":\"official.midotrix@gmail.com\",\"password\":\"$PW\"}" | sed -E 's/"token":"[^"]+"/"token":"…"/'
    ```
-   - It **refuses any non-local host** and refuses to run without `--confirm-copy`.
-   - Promote **your own admin login**, not the n8n service account. The n8n account stays an ordinary OWNER of the existing organization (see "Known limits").
-   - Expected last line: `ALL CHECKS PASSED.` It checks: schema drift against the baseline, no rows lost, every untouched table byte-identical, exactly one operator, every client user in an organization, audit attribution, the CHECK constraint rejects a bad insert, downgrade → upgrade round trip, and that the real app boots on the migrated copy.
-   - **Any FAIL → stop and send me the output.** A *schema drift* failure means production's real schema differs from what the baseline migration assumes; stamping would be wrong.
-   - The script is not re-runnable on the same copy (it leaves it migrated): drop and re-restore to run again.
+   The last line must show `"role":"PLATFORM_OPERATOR"`.
+6. **Switch n8n back on** and run one real analysis end to end through the frontend. n8n's own account is unchanged and keeps working (I tested this on a copy).
+7. **Delete the Codespace** (it holds a copy of production data): github.com/codespaces → **⋯** next to it → **Delete**.
 
-## C. Production cutover (only after B passes and you say go)
+### Part 3B — Cutover from Windows (only if you did 2B)
+Git Bash, folder `apps/backend/src`, venv active:
+```bash
+export RECONFLOW_DATABASE_URL='<production External Database URL>'
+pg_dump "$RECONFLOW_DATABASE_URL" -Fc --no-owner -f ../../../before_batch1.dump     # backup first; keep this file
+alembic stamp 0001
+alembic -x operator_email=official.midotrix@gmail.com upgrade head
+alembic current                                                                      # must say: 0002 (head)
+```
+Then continue with step 4 above.
 
-1. **Backup** (keep the file): `pg_dump "<external-database-url>" -Fc -f before_batch1.dump`.
-2. **Pick a quiet moment and pause n8n runs.** Between steps 3 and 4 the old code is still running against the new schema; the promoted account cannot log in on old code (it does not know the new role), other accounts are fine. Keep this window to minutes.
-3. **Migrate** (from your machine, against production):
-   ```bash
-   cd apps/backend/src
-   export RECONFLOW_DATABASE_URL='<external-database-url>'
-   alembic stamp 0001
-   alembic -x operator_email=<same email as in B> upgrade head
-   alembic current            # expect: 0002 (head)
-   ```
-4. **Deploy the code** (push the branch / merge to the branch Render deploys). On start the app verifies the database is at head and **refuses to start otherwise**; Render then keeps the previous deploy serving.
-5. **Smoke test** (replace host/credentials):
-   ```bash
-   H=https://<your-api>.onrender.com
-   curl -s -o /dev/null -w "POST /users, no token      -> %{http_code} (want 401)\n" -X POST $H/users -H 'Content-Type: application/json' -d '{"email":"x@x.invalid","password":"long-enough-pass","role":"OWNER"}'
-   curl -s -o /dev/null -w "GET /analyses/<id>, no token -> %{http_code} (want 401)\n" $H/analyses/<any-analysis-id>
-   curl -s -o /dev/null -w "GET /reports/<id>/download   -> %{http_code} (want 401)\n" $H/reports/<any-report-id>/download
-   TOKEN=$(curl -s -X POST $H/auth/login -H 'Content-Type: application/json' -d '{"email":"<you>","password":"<pw>"}' | python -c "import sys,json;print(json.load(sys.stdin)['token'])")
-   curl -s $H/auth/me -H "Authorization: Bearer $TOKEN"            # role PLATFORM_OPERATOR, organization_id null
-   curl -s $H/auth/me/branches -H "Authorization: Bearer $TOKEN"    # every branch
-   ```
-   Then run one real analysis end to end through n8n and the frontend.
-6. **Future migrations** run automatically: set Render's *Pre-Deploy Command* to `cd apps/backend/src && alembic upgrade head`.
+---
 
-## D. Rollback
-- **Before the new code is deployed (and no second client exists yet):** `alembic downgrade 0001` (operator becomes an ordinary OWNER) and keep running the old code. The rehearsal proves this round trip.
-- **Otherwise:** restore `before_batch1.dump`. Downgrading after a second organization exists would leave users without an organization link, so use the backup.
+## Part 4 — Rotate two secrets
+See `docs/ROTATE_SECRETS.md`.
 
-## E. Day-to-day after Batch 1
-- **New client:** sign in as the operator → `POST /organizations` → `POST /users` (`role: OWNER`, `organization_id`) → the client's Owner then creates branches and users in their own organization. An Owner sees every branch of their organization automatically, including future ones; other roles need `POST /users/{id}/branch-access`.
-- **Lost operator access:** `cd apps/backend/src && python -m bootstrap.create_operator --email <email>` (hidden password prompt), or `--promote-existing`. There is deliberately no HTTP route that can create an operator.
-- **Optional seeding:** set `RECONFLOW_SEED_OPERATOR_EMAIL` / `RECONFLOW_SEED_OPERATOR_PASSWORD` to create an operator on first start (never modifies an existing account).
+## Part 5 — If something goes wrong
+- **Rehearsal failed:** nothing was changed; send me the `FAIL` lines.
+- **Cutover failed before "DATABASE MIGRATED":** the script stops by itself. Production is either untouched or recoverable: send me the output, do not retry blindly.
+- **After the new code is live and something is wrong:** tell me; do not delete anything. The backup you downloaded restores the old state (I will give you the exact restore command). While no second client exists, a clean step back is also possible: `alembic downgrade 0001` plus Render → **Rollbacks** to the previous deploy.
+- **Locked out of the admin account:** in a terminal on the repo (folder `apps/backend/src`, with `RECONFLOW_DATABASE_URL` set): `python -m bootstrap.create_operator --email <email>`.
 
-## F. Known limits after Batch 1
-- **n8n:** it still logs in with its own service account (an OWNER of the existing organization). That keeps working, but it can only see that one organization, so running analyses for a *second* client through n8n needs the planned token pass-through (browser sends the user's token → n8n forwards it). That design needs the n8n workflow JSON.
-- **Audit log:** entries made by the account that became the operator, and not tied to an analysis (e.g. creating the first organization), are visible to the operator only.
-- **Roles:** the audit log is readable by OWNER (own organization) and the operator; deployment endpoints are operator-only; AUDITOR is read-only.
-- Not audited: login brute-force protection; very large multipart uploads are parsed before authentication (FastAPI reads the form first).
+## Known limits after Batch 1
+- **n8n:** its account is an Owner of the first client only. A second client's analyses through n8n need the token pass-through I will design once I have the workflow JSON.
+- **Audit log:** events by the account that became the operator and not tied to an analysis are visible to the operator only.
+- **Not yet covered:** brute-force protection on login; a minimum password length when *creating* users (the new change-password route enforces 12 characters).

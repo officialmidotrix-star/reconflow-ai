@@ -21,7 +21,7 @@ def get_current_user_id() -> str:
 
 
 @router.post("/{analysis_id}/lead", response_model=LeadResponse, status_code=201)
-async def record_lead(
+def record_lead(
     analysis_id: str,
     body: RecordLeadRequest,
     _requested_by: str = Depends(get_current_user_id),

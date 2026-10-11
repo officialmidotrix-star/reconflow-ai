@@ -31,7 +31,7 @@ class MyBranchResponse(BaseModel):
 
 
 @router.get("/auth/me/branches", response_model=list[MyBranchResponse])
-async def my_branches(
+def my_branches(
     ctx: AccessContext = Depends(current_access), db: Session = Depends(get_db)
 ) -> list[MyBranchResponse]:
     """Every branch the signed-in user may act on. Owners get every branch
@@ -56,7 +56,7 @@ async def my_branches(
 
 
 @router.get("/organizations", response_model=list[OrganizationResponse])
-async def list_my_organizations(
+def list_my_organizations(
     ctx: AccessContext = Depends(current_access), db: Session = Depends(get_db)
 ) -> list[OrganizationResponse]:
     """Operator: every organization. Everyone else: their own."""

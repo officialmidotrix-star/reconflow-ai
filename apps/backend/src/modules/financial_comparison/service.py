@@ -10,6 +10,7 @@ rather than half-applying a supersede.
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import delete, select
@@ -53,16 +54,29 @@ class ComparisonService:
             m for m in matches if m.pos_transaction_id and m.platform_transaction_id
         ]
 
+        # One query for every transaction of the analysis, and one commission-rate
+        # lookup per calendar day - not two queries and a lookup per matched pair
+        # (about 4 queries per order before: 9.4 s of a 13 s run at 5,000 orders).
+        txns = {
+            t.id: t
+            for t in self._db.execute(
+                select(Transaction).where(Transaction.analysis_id == analysis_id)
+            ).scalars()
+        }
+        rate_by_day: dict[date, Decimal | None] = {}
+
         results: list[ComparisonResult] = []
         skipped_no_contract = 0
-
         for match in fully_matched:
-            pos_txn = self._db.get(Transaction, match.pos_transaction_id)
-            platform_txn = self._db.get(Transaction, match.platform_transaction_id)
+            pos_txn = txns[match.pos_transaction_id]
+            platform_txn = txns[match.platform_transaction_id]
 
-            rate = self._contract_lookup.get_commission_rate(
-                analysis_id=analysis_id, as_of=pos_txn.occurred_at
-            )
+            day = pos_txn.occurred_at.date()
+            if day not in rate_by_day:
+                rate_by_day[day] = self._contract_lookup.get_commission_rate(
+                    analysis_id=analysis_id, as_of=pos_txn.occurred_at
+                )
+            rate = rate_by_day[day]
             if rate is None:
                 skipped_no_contract += 1
                 continue

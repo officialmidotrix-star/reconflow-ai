@@ -530,3 +530,80 @@ class TestAuditLogScoping:
     def test_non_owner_roles_cannot_read_the_audit_log(self, world):
         for who in (world.accountant_a, world.auditor_a):
             assert world.c.get("/audit-log", headers=who["h"]).status_code == 403
+
+
+class TestListUsers:
+    def test_operator_sees_everyone_and_an_owner_only_their_own_organization(self, world):
+        everyone = {u["email"] for u in world.c.get("/users", headers=world.op).json()}
+        assert {OPERATOR_EMAIL, world.owner_a["email"], world.accountant_a["email"],
+                world.auditor_a["email"], world.owner_b["email"]} <= everyone
+
+        mine = world.c.get("/users", headers=world.owner_a["h"]).json()
+        assert {u["email"] for u in mine} == {world.owner_a["email"], world.accountant_a["email"], world.auditor_a["email"]}
+        assert all(u["organization_id"] == world.org_a for u in mine)
+        assert not any("password" in key for u in mine for key in u)  # no hashes in the response
+
+    def test_other_roles_and_anonymous_cannot_list(self, world):
+        assert world.c.get("/users").status_code == 401
+        for who in (world.accountant_a, world.auditor_a):
+            assert world.c.get("/users", headers=who["h"]).status_code == 403
+
+
+class TestPasswordChange:
+    NEW = "a-brand-new-passphrase-1"
+
+    def _login_code(self, world, email, pw):
+        return world.c.post("/auth/login", json={"email": email, "password": pw}).status_code
+
+    def test_operator_resets_a_users_password_and_their_old_session_dies(self, world):
+        old_headers = world.owner_a["h"]
+        assert world.c.get("/auth/me", headers=old_headers).status_code == 200
+        r = world.c.post(f"/users/{world.owner_a['id']}/password", json={"new_password": self.NEW}, headers=world.op)
+        assert r.status_code == 204, r.text
+        assert world.c.get("/auth/me", headers=old_headers).status_code == 401  # old token revoked
+        assert self._login_code(world, world.owner_a["email"], PW) == 401       # old password dead
+        assert self._login_code(world, world.owner_a["email"], self.NEW) == 200  # new one works
+
+    def test_owner_can_reset_users_of_their_own_organization_only(self, world):
+        h = world.owner_a["h"]
+        assert world.c.post(f"/users/{world.accountant_a['id']}/password", json={"new_password": self.NEW}, headers=h).status_code == 204
+        assert self._login_code(world, world.accountant_a["email"], self.NEW) == 200
+        # another organization's user, and the operator: indistinguishable from "no such user"
+        for target in (world.owner_b["id"], world.victim["analysis_id"]):
+            r = world.c.post(f"/users/{target}/password", json={"new_password": self.NEW}, headers=h)
+            assert r.status_code == 404 and r.json()["detail"]["error_code"] == "NOT_FOUND"
+        import bootstrap.database as bdb
+        from modules.identity_access.models import User
+
+        with bdb.SessionLocal() as db:
+            op_id = db.query(User).filter(User.email == OPERATOR_EMAIL).one().id
+        assert world.c.post(f"/users/{op_id}/password", json={"new_password": self.NEW}, headers=h).status_code == 404
+        assert self._login_code(world, OPERATOR_EMAIL, OPERATOR_PW) == 200  # untouched
+
+    def test_non_owners_cannot_reset_other_users(self, world):
+        for who in (world.accountant_a, world.auditor_a):
+            r = world.c.post(f"/users/{world.owner_a['id']}/password", json={"new_password": self.NEW}, headers=who["h"])
+            assert r.status_code == 404
+
+    def test_changing_your_own_password_needs_the_current_one(self, world):
+        me = world.accountant_a
+        url = f"/users/{me['id']}/password"
+        assert world.c.post(url, json={"new_password": self.NEW}, headers=me["h"]).status_code == 403
+        wrong = world.c.post(url, json={"new_password": self.NEW, "current_password": "not-it-at-all"}, headers=me["h"])
+        assert wrong.status_code == 403 and wrong.json()["detail"]["error_code"] == "CURRENT_PASSWORD_INCORRECT"
+        assert world.c.post(url, json={"new_password": self.NEW, "current_password": PW}, headers=me["h"]).status_code == 204
+        assert self._login_code(world, me["email"], self.NEW) == 200
+        assert self._login_code(world, me["email"], PW) == 401
+
+    def test_weak_or_unchanged_passwords_and_anonymous_callers_are_refused(self, world):
+        url = f"/users/{world.accountant_a['id']}/password"
+        assert world.c.post(url, json={"new_password": "short"}, headers=world.op).status_code == 422
+        same = world.c.post(url, json={"new_password": PW}, headers=world.op)
+        assert same.status_code == 422 and same.json()["detail"]["error_code"] == "PASSWORD_UNCHANGED"
+        assert world.c.post(url, json={"new_password": self.NEW}).status_code == 401
+
+    def test_the_change_is_audited_without_the_password(self, world):
+        world.c.post(f"/users/{world.accountant_a['id']}/password", json={"new_password": self.NEW}, headers=world.owner_a["h"])
+        entries = [e for e in world.c.get("/audit-log?limit=1000&event=password_changed", headers=world.op).json()]
+        assert len(entries) == 1
+        assert self.NEW not in str(entries[0]) and entries[0]["details"]["target_user_id"] == world.accountant_a["id"]

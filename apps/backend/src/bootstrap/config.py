@@ -73,3 +73,11 @@ def get_allowed_origins() -> list[str]:
         "frontend on any other origin will be blocked by CORS until this is set."
     )
     return ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+
+def get_operator_email() -> str | None:
+    """The platform operator's email: RECONFLOW_OPERATOR_EMAIL (preferred) or
+    the older RECONFLOW_SEED_OPERATOR_EMAIL. Used both to promote an existing
+    account during the migration and to create the account on an empty database."""
+    value = os.environ.get("RECONFLOW_OPERATOR_EMAIL") or os.environ.get("RECONFLOW_SEED_OPERATOR_EMAIL")
+    return value.strip() or None if value else None

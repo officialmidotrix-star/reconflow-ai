@@ -7,6 +7,35 @@
   },
   "paths": {
     "/users": {
+      "get": {
+        "tags": [
+          "identity-access"
+        ],
+        "summary": "List Users",
+        "description": "Operator: every user. Owner: the users of their own organization.",
+        "operationId": "list_users_users_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/UserResponse"
+                  },
+                  "type": "array",
+                  "title": "Response List Users Users Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
       "post": {
         "tags": [
           "identity-access"
@@ -50,6 +79,57 @@
             "HTTPBearer": []
           }
         ]
+      }
+    },
+    "/users/{user_id}/password": {
+      "post": {
+        "tags": [
+          "identity-access"
+        ],
+        "summary": "Change Password",
+        "description": "Change your own password (send `current_password`), or - as the\nplatform operator, or as an Owner for a user of your own organization -\nreset someone else's. All of the target's sessions are revoked.",
+        "operationId": "change_password_users__user_id__password_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/auth/login": {
@@ -2017,6 +2097,64 @@
         ]
       }
     },
+    "/discrepancies/{discrepancy_id}/cancellation": {
+      "post": {
+        "tags": [
+          "discrepancy-detection"
+        ],
+        "summary": "Confirm Cancellation",
+        "description": "Say who cancelled an order that was cancelled after preparation.\nCUSTOMER or PLATFORM makes it claimable (net of commission); RESTAURANT\nmakes it not claimable.",
+        "operationId": "confirm_cancellation_discrepancies__discrepancy_id__cancellation_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "discrepancy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Discrepancy Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmCancellationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscrepancyResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "tags": [
@@ -2213,10 +2351,18 @@
             "type": "integer",
             "title": "Unmatched Platform Count"
           },
+          "total_recoverable_amount": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Total Recoverable Amount"
+          },
           "total_potential_revenue_leakage": {
             "type": "string",
             "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Total Potential Revenue Leakage"
+          },
+          "groups": {
+            "$ref": "#/components/schemas/SummaryGroups"
           },
           "discrepancy_breakdown": {
             "items": {
@@ -2224,6 +2370,14 @@
             },
             "type": "array",
             "title": "Discrepancy Breakdown"
+          },
+          "orders_not_checked_no_contract": {
+            "type": "integer",
+            "title": "Orders Not Checked No Contract"
+          },
+          "excluded_refund_void_count": {
+            "type": "integer",
+            "title": "Excluded Refund Void Count"
           },
           "restaurant_name": {
             "anyOf": [
@@ -2291,8 +2445,12 @@
           "matched_count",
           "unmatched_pos_count",
           "unmatched_platform_count",
+          "total_recoverable_amount",
           "total_potential_revenue_leakage",
+          "groups",
           "discrepancy_breakdown",
+          "orders_not_checked_no_contract",
+          "excluded_refund_void_count",
           "restaurant_name",
           "contact_email",
           "whatsapp_number",
@@ -2400,6 +2558,41 @@
         ],
         "title": "BranchResponse"
       },
+      "CancelledBy": {
+        "type": "string",
+        "enum": [
+          "CUSTOMER",
+          "PLATFORM",
+          "RESTAURANT"
+        ],
+        "title": "CancelledBy"
+      },
+      "ChangePasswordRequest": {
+        "properties": {
+          "new_password": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 12,
+            "title": "New Password"
+          },
+          "current_password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Password"
+          }
+        },
+        "type": "object",
+        "required": [
+          "new_password"
+        ],
+        "title": "ChangePasswordRequest"
+      },
       "ComparisonRunResponse": {
         "properties": {
           "id": {
@@ -2455,6 +2648,18 @@
           "FAILED"
         ],
         "title": "ComparisonStatus"
+      },
+      "ConfirmCancellationRequest": {
+        "properties": {
+          "cancelled_by": {
+            "$ref": "#/components/schemas/CancelledBy"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cancelled_by"
+        ],
+        "title": "ConfirmCancellationRequest"
       },
       "ContractResponse": {
         "properties": {
@@ -2712,6 +2917,15 @@
         ],
         "title": "DeploymentInfoResponse"
       },
+      "Direction": {
+        "type": "string",
+        "enum": [
+          "UNDERPAID",
+          "OVERPAID",
+          "NOT_APPLICABLE"
+        ],
+        "title": "Direction"
+      },
       "DiscrepancyBreakdownItem": {
         "properties": {
           "category": {
@@ -2725,13 +2939,19 @@
             "type": "string",
             "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Total Amount"
+          },
+          "recoverable_amount": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Recoverable Amount"
           }
         },
         "type": "object",
         "required": [
           "category",
           "count",
-          "total_amount"
+          "total_amount",
+          "recoverable_amount"
         ],
         "title": "DiscrepancyBreakdownItem"
       },
@@ -2763,6 +2983,31 @@
             "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Estimated Loss"
           },
+          "treatment": {
+            "$ref": "#/components/schemas/Treatment"
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Direction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "claimable_amount": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claimable Amount"
+          },
           "order_reference": {
             "anyOf": [
               {
@@ -2786,10 +3031,91 @@
           "category",
           "severity",
           "estimated_loss",
+          "treatment",
+          "direction",
+          "claimable_amount",
           "order_reference",
           "created_at"
         ],
         "title": "DiscrepancyDetailResponse"
+      },
+      "DiscrepancyResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "reconciliation_match_id": {
+            "type": "string",
+            "title": "Reconciliation Match Id"
+          },
+          "category": {
+            "$ref": "#/components/schemas/DiscrepancyCategory"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
+          "estimated_loss": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Estimated Loss"
+          },
+          "treatment": {
+            "$ref": "#/components/schemas/Treatment"
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Direction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "claimable_amount": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claimable Amount"
+          },
+          "order_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Reference"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "reconciliation_match_id",
+          "category",
+          "severity",
+          "estimated_loss",
+          "treatment",
+          "direction",
+          "claimable_amount",
+          "order_reference",
+          "created_at"
+        ],
+        "title": "DiscrepancyResponse"
       },
       "DiscrepancyReviewDecision": {
         "type": "string",
@@ -2900,6 +3226,10 @@
             "type": "integer",
             "title": "Low Count"
           },
+          "excluded_refund_void_count": {
+            "type": "integer",
+            "title": "Excluded Refund Void Count"
+          },
           "checked_at": {
             "type": "string",
             "format": "date-time",
@@ -2916,6 +3246,7 @@
           "high_count",
           "medium_count",
           "low_count",
+          "excluded_refund_void_count",
           "checked_at"
         ],
         "title": "DiscrepancyRunResponse"
@@ -3694,6 +4025,71 @@
           "PLATFORM_SETTLEMENT"
         ],
         "title": "SourceType"
+      },
+      "SummaryGroup": {
+        "properties": {
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "amount": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Amount"
+          }
+        },
+        "type": "object",
+        "required": [
+          "count",
+          "amount"
+        ],
+        "title": "SummaryGroup"
+      },
+      "SummaryGroups": {
+        "properties": {
+          "recoverable": {
+            "$ref": "#/components/schemas/SummaryGroup"
+          },
+          "needs_confirmation": {
+            "$ref": "#/components/schemas/SummaryGroup"
+          },
+          "needs_contract": {
+            "$ref": "#/components/schemas/SummaryGroup"
+          },
+          "to_verify": {
+            "$ref": "#/components/schemas/SummaryGroup"
+          },
+          "not_claimable": {
+            "$ref": "#/components/schemas/SummaryGroup"
+          },
+          "needs_rerun": {
+            "$ref": "#/components/schemas/SummaryGroup"
+          }
+        },
+        "type": "object",
+        "required": [
+          "recoverable",
+          "needs_confirmation",
+          "needs_contract",
+          "to_verify",
+          "not_claimable",
+          "needs_rerun"
+        ],
+        "title": "SummaryGroups",
+        "description": "The five things a discrepancy can mean. Only `recoverable` is the headline."
+      },
+      "Treatment": {
+        "type": "string",
+        "enum": [
+          "RECOVERABLE",
+          "NEEDS_CONFIRMATION",
+          "NEEDS_CONTRACT",
+          "TO_VERIFY",
+          "NOT_CLAIMABLE",
+          "NEEDS_RERUN"
+        ],
+        "title": "Treatment",
+        "description": "What the number means for the restaurant. Only RECOVERABLE counts toward\nthe headline figure; everything else is shown, but separately."
       },
       "UpdateEventResponse": {
         "properties": {

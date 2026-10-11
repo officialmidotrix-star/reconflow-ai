@@ -2,8 +2,8 @@
 Startup seed for the PLATFORM_OPERATOR account (the person who onboards
 client organizations and runs analyses on their behalf).
 
-Runs only when RECONFLOW_SEED_OPERATOR_EMAIL and
-RECONFLOW_SEED_OPERATOR_PASSWORD are both set, and only if no user with
+Runs only when the operator email (RECONFLOW_OPERATOR_EMAIL, or the older
+RECONFLOW_SEED_OPERATOR_EMAIL) and RECONFLOW_SEED_OPERATOR_PASSWORD are both set, and only if no user with
 that email exists - safe to leave the variables set. It never changes an
 existing account; promoting an existing user is an explicit act
 (`python -m bootstrap.create_operator --promote-existing`, or the
@@ -19,6 +19,7 @@ import logging
 import os
 
 from bootstrap.access import ScopedAuditLogService
+from bootstrap.config import get_operator_email
 from bootstrap.database import SessionLocal
 from modules.identity_access.exceptions import IdentityAccessError_
 from modules.identity_access.models import User, UserRole
@@ -35,7 +36,7 @@ def run_operator_seed() -> None:
             "client organization and its OWNER through the API."
         )
 
-    email = os.environ.get("RECONFLOW_SEED_OPERATOR_EMAIL")
+    email = get_operator_email()
     password = os.environ.get("RECONFLOW_SEED_OPERATOR_PASSWORD")
     if not email or not password:
         return

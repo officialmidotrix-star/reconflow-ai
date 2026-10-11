@@ -1,4 +1,4 @@
-# ReconFlow — DECISIONS (updated 2026-10-09)
+# ReconFlow — DECISIONS (updated 2026-10-10)
 
 Read this first, then `docs/AUDIT_2026-10-07.md` (evidence and detail) and, for anything touching
 production, `docs/BATCH1_RUNBOOK.md`.
@@ -92,27 +92,51 @@ Status legend: **AGREED** (user decided) · **PROPOSED** (mine, awaiting approva
   app boots); the four original exploits return 401/404 over real HTTP; existing accounts (incl. the n8n service
   account) keep working; a second client's Owner gets 404 on the first client's resources.
 
-## 6. Plan (batches)
+## 6. Plan (batches) — one zip per batch, built on its own branch, tests green before delivery
 | Batch | Content | Status |
 |---|---|---|
-| 1 | Security + tenancy + Alembic | **Implemented and verified locally (incl. PostgreSQL 16); NOT deployed.** Needs the user's rehearsal on a real dump, then the cutover in `docs/BATCH1_RUNBOOK.md`. n8n token pass-through is **not built** — waiting for the workflow JSON (until then n8n's service account only reaches the first organization). |
-| 2 | Numbers: headline definition, direction-aware variances, net of commission, "to verify", skipped-contract surfacing, tighter cancellation matching, POS source label design | not started — design needs approval first |
-| 3 | Performance (N+1, fallback matching, blocking routes) + Postgres re-measure + 100k test; storage swap to object storage | not started |
-| 4 | UX: branch_platforms schema, login→picker (`/auth/me/branches` already exists), upload cleanup, previous-analyses page, Midotrix-styled RTL-ready screens | not started |
-| 5 | Dispute letter: server-side PDF (WeasyPrint), version+hash, claim reference, AI narrative editor with post-check; English first | not started |
-| 6 | Deployment: n8n off Windows/ngrok, stable domain, CORS, SPA rewrite | not started |
-Later/flagged: AI column mapping (human confirmation required), bank reconciliation, load-test harness. Tax/loyalty:
-different problem class, needs an accountant — do not extend.
+| 1 | Security, tenancy, Alembic | Delivered (zip 1). Applied by the user on branch `batch1-v2`; NOT deployed. |
+| 1.1 | Migration runs on Render at deploy time (guarded); change/reset password; list users; `.gitignore` | Delivered (zip 1.1) |
+| 2 | Numbers: headline = recoverable underpayments net of commission; overpayments are not losses; Unexpected → "to verify"; skipped-contract surfaced; stricter cancellation matching; per-case cancellation confirmation | Delivered (zip 2) — see `docs/NUMBERS.md` |
+| 3 | Performance (N+1, fallback matching, blocking routes) + Postgres re-measure + 100k test; S3 storage class (switched off until the user chooses a provider — money); labelled test data + sample files | Delivered — cumulative zip (1.1 + 2 + 3), branch `batch3-cumulative`; see `docs/PERFORMANCE.md` |
+| 4 | UX: branch_platforms schema, login→picker, upload cleanup, previous analyses, Midotrix look, RTL-ready | after 3 |
+| 5 | Dispute letter (English first), server-side PDF, AI narrative editor with post-check | after 4 |
+| 6 | Deployment: n8n off Windows/ngrok, stable domain, CORS | after 5 (needs the user's inputs) |
 
-## 7. Open items
-- **OPEN (user):** paste the n8n workflow JSON (credentials redacted) — unblocks the n8n token pass-through (needed
-  before running analyses for a second client through n8n) and the node-level change list.
-- **OPEN (user):** run `python -m bootstrap.verify_migration` on a restored copy of the real dump and report the
-  result; then say go for the cutover. Pick which account becomes the operator (own admin login, not n8n's).
-- **OPEN (user, read-only, 5 min):** the live Render checks in runbook §A (plans, DB expiry, disk, encryption key,
-  whether `POST /users` still answers 422).
-- **OPEN (user):** confirm with a real platform contact which language(s) a claim letter must be in.
-- **PROPOSED (Batch 2):** when a contract rate is unavailable, do not guess net-of-commission — show the amount as
-  unquantified "needs contract".
-- **Housekeeping:** `reconflow_results_endpoints.diff` is a stray committed file in the backend repo; `docs/openapi.json`
-  was regenerated in Batch 1.
+### Batch 2 decisions I made inside the agreed scope (reversible; change on request)
+- Six treatments: RECOVERABLE, NEEDS_CONFIRMATION, NEEDS_CONTRACT, TO_VERIFY, NOT_CLAIMABLE, NEEDS_RERUN. Only RECOVERABLE is the headline.
+- Net of commission = gross x (1 - contract rate), rounded half-up to cents. Commission overcharge is claimed as is (already net). A gross shortfall is claimed x (1 - rate); lower commission in the restaurant's favour is "to verify" and never subtracted (no double counting).
+- Cancelled by PLATFORM or CUSTOMER = claimable; by RESTAURANT = not claimable. `CLAIMABLE_CANCELLERS` in `modules/discrepancies/models.py`.
+- Refunded/void orders with no payout: excluded and counted, not claimed. A word meaning "cancelled" wins over a refund word.
+- Old discrepancy rows are labelled, never guessed (migration 0003): they show NEEDS_RERUN until the analysis is run again.
+- `total_potential_revenue_leakage` stays in the API as a deprecated alias of the new headline so a frontend deployed before the change shows the corrected number.
+- Not in Batch 2 (by design): the POS channel problem (dine-in / other-platform orders showing as missing) needs the branch+platform link and a POS source label (Batch 4); the current PDF still lists every row (Batch 5).
+
+### Batch 3 facts
+- Found by measurement on PostgreSQL: the comparison step ran ~4 queries per order; the matching fallback was quadratic (18.7 s at 5,000 orders when references differ); and **every long step froze the whole service** (other requests waited the full 15 s, Render's health check included) because handlers were `async def` doing blocking work. All three fixed; results identical (randomized equivalence test, same counts).
+- 100,000 orders: 79 s, ~1 GB peak memory; time is linear, memory ~9 KB/order is the real limit (512 MB instance ≈ 35-40k orders per analysis, estimated).
+- Engine: `pool_pre_ping`, bounded pool (10+10), request thread limit 16 (env-tunable).
+- S3 storage (`RECONFLOW_STORAGE_BACKEND=s3`) is built and tested against a mock S3, OFF by default. Choosing a provider/bucket costs money: user decides.
+- Test data (`RECONFLOW_SEED_DEMO_DATA=1`): org "TEST DATA - Demo Restaurants", 3 branches, test commission rates Talabat 20% / Jahez 15% / HungerStation 30% — TEST VALUES ONLY, one platform per branch until Batch 4.
+- Merchant IDs: optional, blank by default (Batch 4 adds the field; the Batch 5 letter shows a blank line when empty).
+
+## 7. Working rules from the user (2026-10-10) — these override earlier "wait for approval" habits
+1. Everything already agreed in this file proceeds without asking again. Stop ONLY for: production data, money, irreversible steps.
+2. Cutover must need nothing installed on the user's PC: the migration runs on Render at deploy time (`RECONFLOW_AUTO_MIGRATE=1`).
+3. One zip per batch, built on a branch, tests green before delivery; each with a plain-language runbook of at most 10 lines
+   (exact Git Bash commands + the folder). Always `git add` explicit paths, never `git add -A`.
+4. Needs from the user are collected in ONE list (section 8), not asked one at a time.
+5. Short explanations in simple words.
+6. The user only has test data today: the careful rehearsal (`docs/BATCH1_RUNBOOK.md`) is for when data is real.
+
+## 8. Everything needed from the user (asked once; none of it blocks work already possible)
+- n8n workflow JSON, credentials redacted → token pass-through for a second client; node-level change list.
+- ANSWERED (2026-10-11): no client yet → TEST commission rates, clearly labelled; merchant IDs optional and blank by default; one cumulative zip per batch; one test deploy after Batch 3 on a fresh database, one final deploy after all batches.
+- (Still needed, later, per real client) the real commission contract per branch × platform, and the platform merchant/store ID if the platform asks for it.
+- Country of each organization (SA / AE / QA / KW …) → currency.
+- Sender details for the letter: legal name, address, contact person, phone, email, VAT/licence number if shown.
+- A few real files (redacted is fine): a POS export and each platform's settlement report; and the name of the POS column (if any) that says an order came from Talabat/Jahez/etc.
+- Platforms to support first (names).
+- Claim-letter language beyond English: later, after a real platform contact confirms what they accept.
+- MONEY decisions (I stop and wait): object-storage provider/bucket/region; domain name; where n8n will be hosted (a server).
+- Logo file (SVG) and confirmation of the purple/mint tokens.

@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from fastapi import Depends, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -212,7 +213,12 @@ POLICIES: dict[tuple[str, str], Policy] = {
     ("GET", "/auth/me"): Policy(ANY),
     ("GET", "/auth/me/branches"): Policy(ANY),
     ("POST", "/users"): Policy(OWNER_ONLY),  # service enforces own-org / no-operator rules
+    ("GET", "/users"): Policy(OWNER_ONLY),  # operator: everyone; Owner: own organization (service filters)
     ("POST", "/users/{user_id}/branch-access"): Policy(OWNER_ONLY, R.USER_GRANT),
+    # Any signed-in user may call it; the service decides whose password the
+    # caller may change (own, with the current one; operator: anyone's; Owner:
+    # own organization's) and answers a generic 404 for everything else.
+    ("POST", "/users/{user_id}/password"): Policy(ANY),
     # -- organizations / branches / contracts / platforms ----------------
     ("POST", "/organizations"): Policy(OPERATOR_ONLY),
     ("GET", "/organizations"): Policy(ANY),  # view filtered to the caller's scope
@@ -252,6 +258,7 @@ POLICIES: dict[tuple[str, str], Policy] = {
     ("POST", "/uploaded-files/{uploaded_file_id}/validation"): Policy(WRITERS, R.UPLOADED_FILE),
     ("POST", "/uploaded-files/{uploaded_file_id}/normalization"): Policy(WRITERS, R.UPLOADED_FILE),
     ("POST", "/discrepancies/{discrepancy_id}/review"): Policy(WRITERS, R.DISCREPANCY),
+    ("POST", "/discrepancies/{discrepancy_id}/cancellation"): Policy(WRITERS, R.DISCREPANCY),
     ("POST", "/matches/{reconciliation_match_id}/review"): Policy(WRITERS, R.MATCH),
 }
 
@@ -316,15 +323,36 @@ async def _json_body(request: Request) -> dict:
     return body
 
 
+_BODY_RESOURCES = {R.BODY_BRANCH, R.BODY_ORG, R.USER_GRANT}
+
+
 async def enforce_policy(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
     db: Session = Depends(get_db),
 ) -> None:
-    """Router-level dependency applied to every included router."""
+    """Router-level dependency applied to every included router.
+
+    Only reading the JSON body is asynchronous; every database lookup runs in the
+    thread pool (`run_in_threadpool`) so authorization can never block the event
+    loop - which would freeze every other request, including Render's health check."""
     route = request.scope.get("route")
     template = getattr(route, "path", None)
     policy = POLICIES.get((request.method, template))
+    body: dict | None = None
+    if policy is not None and not policy.public and policy.resource in _BODY_RESOURCES:
+        body = await _json_body(request)
+    await run_in_threadpool(_enforce, request, template, policy, credentials, db, body)
+
+
+def _enforce(
+    request: Request,
+    template: str | None,
+    policy: Policy | None,
+    credentials: HTTPAuthorizationCredentials | None,
+    db: Session,
+    body: dict | None,
+) -> None:
     if policy is None:
         logger.error("No access policy for %s %s - denying.", request.method, template)
         raise HTTPException(
@@ -367,11 +395,11 @@ async def enforce_policy(
         case R.ORG_PATH:
             scope.require_org(ctx, params["organization_id"])
         case R.BODY_BRANCH:
-            scope.require_branch(ctx, (await _json_body(request)).get("branch_id"))
+            scope.require_branch(ctx, (body or {}).get("branch_id"))
         case R.BODY_ORG:
-            scope.require_org(ctx, (await _json_body(request)).get("organization_id"))
+            scope.require_org(ctx, (body or {}).get("organization_id"))
         case R.USER_GRANT:
-            branch_id = (await _json_body(request)).get("branch_id")
+            branch_id = (body or {}).get("branch_id")
             target = db.get(User, params["user_id"])
             branch = db.get(Branch, branch_id) if isinstance(branch_id, str) else None
             if (

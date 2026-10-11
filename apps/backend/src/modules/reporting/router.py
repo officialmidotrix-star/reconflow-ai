@@ -35,7 +35,7 @@ def get_current_user_id() -> str:
 @router.post(
     "/analyses/{analysis_id}/reports", response_model=ReportResponse, status_code=201
 )
-async def generate_report(
+def generate_report(
     analysis_id: str,
     body: GenerateReportRequest,
     requested_by: str = Depends(get_current_user_id),
@@ -53,7 +53,7 @@ async def generate_report(
 
 
 @router.get("/reports/{report_id}/download")
-async def download_report(
+def download_report(
     report_id: str,
     service: ReportService = Depends(get_report_service),
 ) -> Response:

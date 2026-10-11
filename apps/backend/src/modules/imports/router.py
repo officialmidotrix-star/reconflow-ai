@@ -13,6 +13,7 @@ concern (Analysis Orchestration).
 
 from __future__ import annotations
 
+from fastapi.concurrency import run_in_threadpool
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from .dependencies import AuthContext
@@ -53,7 +54,11 @@ async def upload_file(
 ) -> UploadedFileResponse:
     content = await file.read()
     try:
-        record = service.import_file(
+        # The only handler that must stay `async` (it awaits the upload); the
+        # blocking work - validation, encryption, database - runs in the thread
+        # pool so one big upload cannot freeze every other request.
+        record = await run_in_threadpool(
+            service.import_file,
             analysis_id=analysis_id,
             source_type=source_type,
             original_filename=file.filename or "upload",

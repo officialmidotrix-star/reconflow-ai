@@ -40,7 +40,7 @@ def get_audit_org_scope() -> str | None:
 
 
 @router.get("", response_model=list[AuditLogEntryResponse])
-async def list_audit_log(
+def list_audit_log(
     analysis_id: str | None = Query(default=None),
     user_id: str | None = Query(default=None),
     event: str | None = Query(default=None),

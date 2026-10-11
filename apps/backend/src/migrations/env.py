@@ -12,7 +12,7 @@ from bootstrap.model_registry import import_all_models
 from db.base import Base
 
 config = context.config
-if config.config_file_name is not None:
+if config.config_file_name is not None and not config.attributes.get("skip_logging_config"):
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 import_all_models()
@@ -34,7 +34,7 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     section = config.get_section(config.config_ini_section) or {}
-    section["sqlalchemy.url"] = _url().replace("%", "%%")
+    section["sqlalchemy.url"] = _url()  # a plain dict: no ConfigParser "%" escaping needed
     connectable = engine_from_config(section, prefix="sqlalchemy.", poolclass=pool.NullPool)
     with connectable.connect() as connection:
         context.configure(

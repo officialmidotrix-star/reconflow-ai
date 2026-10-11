@@ -51,7 +51,7 @@ def get_branch_scope() -> frozenset[str] | None:
 
 
 @router.post("/organizations", response_model=OrganizationResponse, status_code=201)
-async def create_organization(
+def create_organization(
     body: CreateOrganizationRequest,
     requested_by: str = Depends(get_current_user_id),
     service: OrganizationService = Depends(get_organization_service),
@@ -69,7 +69,7 @@ async def create_organization(
 
 
 @router.get("/organizations/current", response_model=OrganizationResponse | None)
-async def get_current_organization(
+def get_current_organization(
     organization_id: str | None = Depends(get_current_organization_id),
     service: OrganizationService = Depends(get_organization_service),
 ) -> OrganizationResponse | None:
@@ -80,7 +80,7 @@ async def get_current_organization(
 
 
 @router.post("/branches", response_model=BranchResponse, status_code=201)
-async def create_branch(
+def create_branch(
     body: CreateBranchRequest,
     requested_by: str = Depends(get_current_user_id),
     service: OrganizationService = Depends(get_organization_service),
@@ -98,7 +98,7 @@ async def create_branch(
 
 
 @router.get("/branches/{branch_id}", response_model=BranchResponse)
-async def get_branch(
+def get_branch(
     branch_id: str,
     service: OrganizationService = Depends(get_organization_service),
 ) -> BranchResponse:
@@ -112,7 +112,7 @@ async def get_branch(
 
 
 @router.get("/organizations/{organization_id}/branches", response_model=list[BranchResponse])
-async def list_branches(
+def list_branches(
     organization_id: str,
     branch_scope: frozenset[str] | None = Depends(get_branch_scope),
     service: OrganizationService = Depends(get_organization_service),

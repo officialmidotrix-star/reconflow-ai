@@ -38,7 +38,7 @@ def get_current_user_id() -> str:
 
 
 @router.post("/platforms", response_model=PlatformResponse, status_code=201)
-async def create_platform(
+def create_platform(
     body: CreatePlatformRequest,
     requested_by: str = Depends(get_current_user_id),
     service: ReferenceContractService = Depends(get_reference_contract_service),
@@ -53,14 +53,14 @@ async def create_platform(
 
 
 @router.get("/platforms", response_model=list[PlatformResponse])
-async def list_platforms(
+def list_platforms(
     service: ReferenceContractService = Depends(get_reference_contract_service),
 ) -> list[PlatformResponse]:
     return [PlatformResponse.model_validate(p) for p in service.list_platforms()]
 
 
 @router.post("/contracts", response_model=ContractResponse, status_code=201)
-async def create_contract(
+def create_contract(
     body: CreateContractRequest,
     requested_by: str = Depends(get_current_user_id),
     service: ReferenceContractService = Depends(get_reference_contract_service),
@@ -79,7 +79,7 @@ async def create_contract(
 
 
 @router.get("/branches/{branch_id}/contracts", response_model=list[ContractResponse])
-async def list_contracts_for_branch(
+def list_contracts_for_branch(
     branch_id: str,
     service: ReferenceContractService = Depends(get_reference_contract_service),
 ) -> list[ContractResponse]:

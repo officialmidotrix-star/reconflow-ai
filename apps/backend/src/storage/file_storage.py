@@ -73,3 +73,73 @@ class LocalEncryptedFileStorage(FileStorage):
 
     def exists(self, path: str) -> bool:
         return self._resolve(path).exists()
+
+
+class S3EncryptedFileStorage(FileStorage):
+    """The same contract as LocalEncryptedFileStorage, on any S3-compatible
+    object store (AWS S3, Cloudflare R2, Backblaze B2, MinIO, ...).
+
+    Files are encrypted with the same Fernet key BEFORE they leave this
+    process, so the storage provider only ever holds ciphertext - you do not
+    have to trust the provider with client financial data, and objects written
+    by the local backend and this one use the same format.
+
+    Switched on by RECONFLOW_STORAGE_BACKEND=s3 (see bootstrap/storage_factory.py);
+    the default stays local disk. boto3 is imported lazily so the local-only
+    install never loads it.
+    """
+
+    def __init__(
+        self,
+        bucket: str,
+        encryption_key: bytes,
+        *,
+        prefix: str = "",
+        endpoint_url: str | None = None,
+        region_name: str | None = None,
+        client=None,
+    ) -> None:
+        if client is None:
+            import boto3
+
+            client = boto3.client("s3", endpoint_url=endpoint_url or None, region_name=region_name or None)
+        self._client = client
+        self._bucket = bucket
+        self._prefix = prefix.strip("/") + "/" if prefix.strip("/") else ""
+        self._fernet = Fernet(encryption_key)
+
+    def _key(self, path: str) -> str:
+        parts = path.replace("\\", "/").split("/")
+        if not path or path.startswith("/") or any(p in ("", ".", "..") for p in parts):
+            # Same defence as the local backend: never build a key from a path
+            # that could point outside this application's area of the bucket.
+            raise ValueError(f"Unsafe storage path: {path!r}")
+        return self._prefix + "/".join(parts)
+
+    def check_access(self) -> None:
+        """Fail fast at start-up (wrong bucket name, bad credentials) rather than on the first upload."""
+        self._client.head_bucket(Bucket=self._bucket)
+
+    def save(self, path: str, content: bytes) -> None:
+        self._client.put_object(Bucket=self._bucket, Key=self._key(path), Body=self._fernet.encrypt(content))
+
+    def read(self, path: str) -> bytes:
+        try:
+            obj = self._client.get_object(Bucket=self._bucket, Key=self._key(path))
+        except self._client.exceptions.NoSuchKey as exc:
+            raise FileNotFoundError(path) from exc  # same error the local backend raises
+        return self._fernet.decrypt(obj["Body"].read())
+
+    def delete(self, path: str) -> None:
+        self._client.delete_object(Bucket=self._bucket, Key=self._key(path))  # S3 delete is idempotent
+
+    def exists(self, path: str) -> bool:
+        from botocore.exceptions import ClientError
+
+        try:
+            self._client.head_object(Bucket=self._bucket, Key=self._key(path))
+            return True
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
+                return False
+            raise

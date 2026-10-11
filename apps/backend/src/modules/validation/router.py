@@ -34,7 +34,7 @@ def get_current_user_id() -> str:
 
 
 @router.post("", response_model=FileValidationResponse, status_code=201)
-async def validate_uploaded_file(
+def validate_uploaded_file(
     uploaded_file_id: str,
     requested_by: str = Depends(get_current_user_id),
     service: ValidationService = Depends(get_validation_service),

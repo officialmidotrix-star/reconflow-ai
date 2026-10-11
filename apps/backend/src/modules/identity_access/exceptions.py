@@ -57,3 +57,16 @@ class CrossOrganizationError(IdentityAccessError_):
 
     error_code = "NOT_FOUND"
     http_status = 404
+
+
+class CurrentPasswordIncorrectError(IdentityAccessError_):
+    """403, deliberately not 401: the session is fine, and a 401 makes
+    clients treat the user as signed out."""
+
+    error_code = "CURRENT_PASSWORD_INCORRECT"
+    http_status = 403
+
+
+class PasswordUnchangedError(IdentityAccessError_):
+    error_code = "PASSWORD_UNCHANGED"
+    http_status = 422
