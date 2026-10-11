@@ -18,8 +18,13 @@ from sqlalchemy import Column, String, Table, create_engine, select
 from sqlalchemy.orm import Session
 
 from modules.discrepancies.dependencies import InMemoryAuditLogger
-from modules.discrepancies.models import Discrepancy, DiscrepancyCategory, Severity
-from modules.discrepancies.service import DiscrepancyService, severity_for
+from modules.discrepancies.exceptions import NotACancellationError
+from modules.discrepancies.models import (
+    CancelledBy, Direction, Discrepancy, DiscrepancyCategory, Severity, Treatment,
+)
+from modules.discrepancies.service import (
+    DiscrepancyService, StatusClass, classify_order_status, net_of_commission, severity_for,
+)
 from modules.financial_comparison.models import ComparisonResult
 from modules.imports.models import Base, SourceType
 from modules.matching.models import ReconciliationMatch
@@ -56,9 +61,33 @@ def audit_logger():
     return InMemoryAuditLogger()
 
 
+class FakeRates:
+    """Stands in for the contract lookup. `rate=None` = no / ambiguous contract."""
+
+    def __init__(self, rate: Decimal | None) -> None:
+        self.rate = rate
+        self.calls = 0
+
+    def get_commission_rate(self, *, analysis_id: str, as_of):
+        self.calls += 1
+        return self.rate
+
+
 @pytest.fixture()
 def service(db, audit_logger):
+    """No contract lookup at all: nothing can be quantified net of commission."""
     return DiscrepancyService(db=db, audit_logger=audit_logger)
+
+
+@pytest.fixture()
+def rates():
+    return FakeRates(Decimal("0.15"))
+
+
+@pytest.fixture()
+def priced(db, audit_logger, rates):
+    """A service that knows the commission rate: 15%."""
+    return DiscrepancyService(db=db, audit_logger=audit_logger, contract_lookup=rates)
 
 
 def _day(offset: int = 0) -> datetime:
@@ -181,7 +210,10 @@ class TestCancelledAfterPreparation:
         assert d.category == DiscrepancyCategory.CANCELLED_AFTER_PREPARATION
         assert d.estimated_loss == Decimal("30.00")  # still a real loss, same amount either way
 
-    @pytest.mark.parametrize("raw_status", ["CANCELLED", "Refunded", "voided by platform", "  cancel  "])
+    @pytest.mark.parametrize(
+        "raw_status",
+        ["CANCELLED", "Canceled", "  cancel  ", "Cancelled - refunded", "cancelled_by_customer", "ملغي", "طلب ملغى"],
+    )
     def test_recognizes_several_real_world_spellings(self, service, db, raw_status):
         pos = _make_txn(db, source_type=SourceType.POS_EXPORT, amount=Decimal("30.00"))
         db.add(TransactionOrderStatus(transaction_id=pos.id, raw_status=raw_status))
@@ -369,3 +401,230 @@ class TestAuditLogging:
         assert audit_logger.records[-1].event == "discrepancy_run_completed"
         assert audit_logger.records[-1].analysis_id == ANALYSIS_ID
         assert audit_logger.records[-1].metadata["total_count"] == 1
+
+
+class TestStatusClassification:
+    """Whole words, never substrings - and a refund/void is NOT a cancellation after preparation."""
+
+    @pytest.mark.parametrize("raw,expected", [
+        ("Cancelled", StatusClass.CANCELLED),
+        ("CANCELED", StatusClass.CANCELLED),
+        ("Cancelled by customer", StatusClass.CANCELLED),
+        ("CANCELLED_BY_CUSTOMER", StatusClass.CANCELLED),
+        ("order-voided", StatusClass.REFUNDED_OR_VOID),
+        ("cancelled and refunded", StatusClass.CANCELLED),   # a cancel word wins; a human decides who cancelled
+        ("ملغي", StatusClass.CANCELLED),
+        ("Refunded", StatusClass.REFUNDED_OR_VOID),
+        ("voided by platform", StatusClass.REFUNDED_OR_VOID),
+        ("Reversal", StatusClass.REFUNDED_OR_VOID),
+        ("COMPLETED", StatusClass.OTHER),
+        ("Paid", StatusClass.OTHER),
+        ("", StatusClass.OTHER),
+        ("Cancellation fee waived", StatusClass.OTHER),      # "cancellation" is not "cancelled"
+        ("Avoided", StatusClass.OTHER),                      # contains "void" but is not the word
+        ("uncancelled", StatusClass.OTHER),
+    ])
+    def test_whole_words_only(self, raw, expected):
+        assert classify_order_status(raw) == expected
+
+    def test_a_refunded_order_without_settlement_is_excluded_and_counted_not_claimed(self, service, db):
+        pos = _make_txn(db, source_type=SourceType.POS_EXPORT, amount=Decimal("30.00"))
+        db.add(TransactionOrderStatus(transaction_id=pos.id, raw_status="Refunded")); db.commit()
+        _make_match(db, pos_transaction_id=pos.id, platform_transaction_id=None)
+
+        run = service.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+
+        assert run.total_count == 0 and _discrepancies(db) == []
+        assert run.excluded_refund_void_count == 1  # visible, not silently dropped
+
+
+class TestNetOfCommission:
+    def test_rounds_half_up_to_cents(self):
+        assert net_of_commission(Decimal("100.00"), Decimal("0.15")) == Decimal("85.00")
+        assert net_of_commission(Decimal("60.25"), Decimal("0.15")) == Decimal("51.21")  # 51.2125
+        assert net_of_commission(Decimal("10.00"), Decimal("0.125")) == Decimal("8.75")
+        assert net_of_commission(Decimal("0.10"), Decimal("0.25")) == Decimal("0.08")    # 0.075 -> up
+
+
+class TestHeadlineTreatment:
+    def _missing(self, db, amount="100.00", ref="1001"):
+        pos = _make_txn(db, source_type=SourceType.POS_EXPORT, amount=Decimal(amount), external_reference=ref)
+        _make_match(db, pos_transaction_id=pos.id, platform_transaction_id=None)
+        return pos
+
+    def test_missing_settlement_is_claimed_net_of_commission(self, priced, db):
+        self._missing(db, "100.00")
+        priced.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+        d = _discrepancies(db)[0]
+        assert (d.treatment, d.direction) == (Treatment.RECOVERABLE, Direction.UNDERPAID)
+        assert d.estimated_loss == Decimal("100.00")        # the gross order value, as before
+        assert d.claimable_amount == Decimal("85.00")       # what the platform would actually have paid
+        assert d.order_reference == "1001"
+
+    def test_no_contract_means_needs_contract_never_a_guess(self, db, audit_logger):
+        svc = DiscrepancyService(db=db, audit_logger=audit_logger, contract_lookup=FakeRates(None))
+        self._missing(db)
+        svc.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+        d = _discrepancies(db)[0]
+        assert (d.treatment, d.claimable_amount) == (Treatment.NEEDS_CONTRACT, None)
+        assert d.estimated_loss == Decimal("100.00")
+
+    def test_without_any_lookup_it_is_also_needs_contract(self, service, db):
+        self._missing(db)
+        service.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+        assert _discrepancies(db)[0].treatment == Treatment.NEEDS_CONTRACT
+
+    def test_a_zero_or_negative_amount_is_never_claimed(self, priced, db):
+        self._missing(db, "-20.00")
+        priced.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+        d = _discrepancies(db)[0]
+        assert (d.treatment, d.claimable_amount) == (Treatment.TO_VERIFY, None)
+
+    def test_unexpected_settlement_is_never_a_loss(self, priced, db):
+        plat = _make_txn(db, source_type=SourceType.PLATFORM_SETTLEMENT, amount=Decimal("55.00"), external_reference="9")
+        _make_match(db, pos_transaction_id=None, platform_transaction_id=plat.id)
+        priced.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+        d = _discrepancies(db)[0]
+        assert d.category == DiscrepancyCategory.UNEXPECTED_SETTLEMENT
+        assert (d.treatment, d.direction, d.claimable_amount) == (Treatment.TO_VERIFY, Direction.NOT_APPLICABLE, None)
+        assert d.estimated_loss == Decimal("55.00")
+
+    def test_the_rate_is_looked_up_once_per_day_not_once_per_order(self, priced, db, rates):
+        for i in range(25):
+            self._missing(db, "10.00", ref=f"R{i}")
+        priced.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+        assert rates.calls == 1  # all on the same day
+        assert all(d.claimable_amount == Decimal("8.50") for d in _discrepancies(db))
+
+
+class TestMismatchDirection:
+    def _pair(self, db):
+        pos = _make_txn(db, source_type=SourceType.POS_EXPORT, amount=Decimal("100.00"))
+        plat = _make_txn(db, source_type=SourceType.PLATFORM_SETTLEMENT, amount=Decimal("100.00"))
+        return _make_match(db, pos_transaction_id=pos.id, platform_transaction_id=plat.id)
+
+    def test_underpayment_is_recoverable_net_of_commission(self, priced, db):
+        m = self._pair(db)
+        _make_comparison_result(db, reconciliation_match_id=m.id, settlement_variance=Decimal("-10.00"),
+                                settlement_within_tolerance=False)
+        priced.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+        d = _discrepancies(db)[0]
+        assert (d.category, d.treatment, d.direction) == (
+            DiscrepancyCategory.SETTLEMENT_AMOUNT_MISMATCH, Treatment.RECOVERABLE, Direction.UNDERPAID)
+        assert d.estimated_loss == Decimal("10.00") and d.claimable_amount == Decimal("8.50")
+
+    def test_an_overpayment_is_not_a_loss(self, priced, db):
+        m = self._pair(db)
+        _make_comparison_result(db, reconciliation_match_id=m.id, settlement_variance=Decimal("3.00"),
+                                settlement_within_tolerance=False)
+        priced.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+        d = _discrepancies(db)[0]
+        assert (d.treatment, d.direction, d.claimable_amount) == (Treatment.TO_VERIFY, Direction.OVERPAID, None)
+
+    def test_commission_charged_above_the_contract_is_recoverable_as_is(self, priced, db):
+        m = self._pair(db)
+        _make_comparison_result(db, reconciliation_match_id=m.id, commission_variance=Decimal("4.00"),
+                                commission_within_tolerance=False)
+        priced.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+        d = _discrepancies(db)[0]
+        assert (d.category, d.treatment, d.claimable_amount) == (
+            DiscrepancyCategory.INCORRECT_COMMISSION, Treatment.RECOVERABLE, Decimal("4.00"))
+
+    def test_commission_charged_below_the_contract_is_in_the_restaurants_favour(self, priced, db):
+        m = self._pair(db)
+        _make_comparison_result(db, reconciliation_match_id=m.id, commission_variance=Decimal("-2.50"),
+                                commission_within_tolerance=False)
+        priced.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+        d = _discrepancies(db)[0]
+        assert (d.treatment, d.direction, d.claimable_amount) == (Treatment.TO_VERIFY, Direction.OVERPAID, None)
+
+    def test_underpayment_without_a_rate_needs_a_contract(self, db, audit_logger):
+        svc = DiscrepancyService(db=db, audit_logger=audit_logger, contract_lookup=FakeRates(None))
+        m = self._pair(db)
+        _make_comparison_result(db, reconciliation_match_id=m.id, settlement_variance=Decimal("-10.00"),
+                                settlement_within_tolerance=False)
+        svc.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+        assert _discrepancies(db)[0].treatment == Treatment.NEEDS_CONTRACT
+
+    def test_a_gross_shortfall_and_its_commission_effect_are_not_double_counted(self, priced, db):
+        """Platform records 10 less gross AND (correctly) 1.50 less commission:
+        the loss is 10 - 1.50 = 8.50 (the mismatch claim); the lower commission
+        is in the restaurant's favour and must not add to or subtract from it."""
+        m = self._pair(db)
+        _make_comparison_result(db, reconciliation_match_id=m.id,
+                                settlement_variance=Decimal("-10.00"), settlement_within_tolerance=False,
+                                commission_variance=Decimal("-1.50"), commission_within_tolerance=False)
+        priced.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+        by_cat = {d.category: d for d in _discrepancies(db)}
+        assert by_cat[DiscrepancyCategory.SETTLEMENT_AMOUNT_MISMATCH].claimable_amount == Decimal("8.50")
+        assert by_cat[DiscrepancyCategory.INCORRECT_COMMISSION].claimable_amount is None
+        total = sum((d.claimable_amount or Decimal(0)) for d in by_cat.values())
+        assert total == Decimal("8.50")
+
+
+class TestCancellationConfirmation:
+    def _cancelled(self, db, amount="100.00", ref="2001"):
+        pos = _make_txn(db, source_type=SourceType.POS_EXPORT, amount=Decimal(amount), external_reference=ref)
+        db.add(TransactionOrderStatus(transaction_id=pos.id, raw_status="Cancelled by customer")); db.commit()
+        _make_match(db, pos_transaction_id=pos.id, platform_transaction_id=None)
+
+    def test_starts_as_needs_confirmation_and_is_not_in_any_claim(self, priced, db):
+        self._cancelled(db)
+        priced.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+        d = _discrepancies(db)[0]
+        assert d.category == DiscrepancyCategory.CANCELLED_AFTER_PREPARATION
+        assert (d.treatment, d.claimable_amount) == (Treatment.NEEDS_CONFIRMATION, None)
+
+    @pytest.mark.parametrize("who", [CancelledBy.PLATFORM, CancelledBy.CUSTOMER])
+    def test_platform_or_customer_cancellation_becomes_claimable_net(self, priced, db, who):
+        self._cancelled(db)
+        priced.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+        d = _discrepancies(db)[0]
+        out = priced.confirm_cancellation(discrepancy_id=d.id, cancelled_by=who, requested_by=USER_ID)
+        assert (out.treatment, out.claimable_amount) == (Treatment.RECOVERABLE, Decimal("85.00"))
+
+    def test_the_restaurants_own_cancellation_is_never_claimable(self, priced, db):
+        self._cancelled(db)
+        priced.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+        d = _discrepancies(db)[0]
+        out = priced.confirm_cancellation(discrepancy_id=d.id, cancelled_by=CancelledBy.RESTAURANT, requested_by=USER_ID)
+        assert (out.treatment, out.claimable_amount) == (Treatment.NOT_CLAIMABLE, None)
+
+    def test_the_answer_can_be_changed(self, priced, db):
+        self._cancelled(db)
+        priced.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+        d = _discrepancies(db)[0]
+        priced.confirm_cancellation(discrepancy_id=d.id, cancelled_by=CancelledBy.PLATFORM, requested_by=USER_ID)
+        out = priced.confirm_cancellation(discrepancy_id=d.id, cancelled_by=CancelledBy.RESTAURANT, requested_by=USER_ID)
+        assert out.treatment == Treatment.NOT_CLAIMABLE
+
+    def test_confirmation_survives_running_the_analysis_again(self, priced, db):
+        self._cancelled(db)
+        priced.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+        priced.confirm_cancellation(discrepancy_id=_discrepancies(db)[0].id, cancelled_by=CancelledBy.PLATFORM, requested_by=USER_ID)
+
+        priced.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)  # a re-run replaces the rows
+
+        d = _discrepancies(db)[0]
+        assert (d.treatment, d.claimable_amount) == (Treatment.RECOVERABLE, Decimal("85.00"))
+
+    def test_confirming_without_a_rate_needs_a_contract(self, db, audit_logger):
+        svc = DiscrepancyService(db=db, audit_logger=audit_logger, contract_lookup=FakeRates(None))
+        self._cancelled(db)
+        svc.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+        out = svc.confirm_cancellation(discrepancy_id=_discrepancies(db)[0].id, cancelled_by=CancelledBy.PLATFORM, requested_by=USER_ID)
+        assert (out.treatment, out.claimable_amount) == (Treatment.NEEDS_CONTRACT, None)
+
+    def test_only_cancellations_can_be_confirmed(self, priced, db):
+        pos = _make_txn(db, source_type=SourceType.POS_EXPORT, amount=Decimal("50.00"))
+        _make_match(db, pos_transaction_id=pos.id, platform_transaction_id=None)
+        priced.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+        with pytest.raises(NotACancellationError):
+            priced.confirm_cancellation(discrepancy_id=_discrepancies(db)[0].id, cancelled_by=CancelledBy.PLATFORM, requested_by=USER_ID)
+
+    def test_it_is_audited(self, priced, db, audit_logger):
+        self._cancelled(db)
+        priced.detect_discrepancies(analysis_id=ANALYSIS_ID, requested_by=USER_ID)
+        priced.confirm_cancellation(discrepancy_id=_discrepancies(db)[0].id, cancelled_by=CancelledBy.CUSTOMER, requested_by=USER_ID)
+        rec = [r for r in audit_logger.records if r.event == "cancellation_confirmed"]
+        assert len(rec) == 1 and rec[0].metadata["cancelled_by"] == "CUSTOMER"

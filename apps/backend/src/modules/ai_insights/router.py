@@ -31,7 +31,7 @@ def get_current_user_id() -> str:
 
 
 @router.post("", response_model=AIInsightResponse, status_code=201)
-async def generate_ai_insight(
+def generate_ai_insight(
     analysis_id: str,
     requested_by: str = Depends(get_current_user_id),
     service: AIInsightService = Depends(get_ai_insight_service),

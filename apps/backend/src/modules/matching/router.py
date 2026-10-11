@@ -30,7 +30,7 @@ def get_current_user_id() -> str:
 
 
 @router.post("", response_model=MatchingRunResponse, status_code=201)
-async def run_matching(
+def run_matching(
     analysis_id: str,
     requested_by: str = Depends(get_current_user_id),
     service: MatchingService = Depends(get_matching_service),

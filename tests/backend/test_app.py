@@ -5,7 +5,7 @@ Unlike every module's own unit tests (which call services directly),
 this test goes through real HTTP requests against the actual main.app,
 with bootstrap/wiring.py's real dependency overrides in effect - proving
 the *composition*, not just each module in isolation. It walks nearly the
-entire pipeline: bootstrap a user, stand up an organization/branch,
+entire pipeline: seed the platform operator, onboard an organization and its Owner,
 configure a contract, create an analysis, upload and validate two files,
 normalize them, run matching/comparison/discrepancy detection, generate
 an AI insight and a report, send a notification, and confirm the audit
@@ -31,6 +31,10 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("RECONFLOW_STORAGE_DIR", str(tmp_path / "files"))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("SMTP_HOST", raising=False)
+    # The platform operator is the only account that can exist without an
+    # organization; it is created by the startup seed (no HTTP route).
+    monkeypatch.setenv("RECONFLOW_SEED_OPERATOR_EMAIL", "operator@midotrix.test")
+    monkeypatch.setenv("RECONFLOW_SEED_OPERATOR_PASSWORD", "operator-passphrase-1")
 
     for mod_name in list(sys.modules):
         if mod_name == "main" or mod_name.startswith("bootstrap"):
@@ -47,7 +51,7 @@ class TestOpenAPISchema:
         schema = client.get("/openapi.json").json()
         paths = schema["paths"]
         expected = [
-            "/users", "/auth/login", "/auth/logout", "/auth/me",
+            "/users", "/auth/login", "/auth/logout", "/auth/me", "/auth/me/branches",
             "/users/{user_id}/branch-access",
             "/organizations", "/organizations/current", "/branches",
             "/branches/{branch_id}", "/organizations/{organization_id}/branches",
@@ -83,14 +87,35 @@ class TestOpenAPISchema:
 
 class TestFullPipelineThroughRealHttp:
     def test_end_to_end_flow(self, client):
-        # 1. Bootstrap an Owner user (no auth required for this one, by design).
+        # 1. The seeded platform operator signs in (no HTTP route can create one).
+        op_login = client.post(
+            "/auth/login",
+            json={"email": "operator@midotrix.test", "password": "operator-passphrase-1"},
+        )
+        assert op_login.status_code == 200, op_login.text
+        assert op_login.json()["user"]["role"] == "PLATFORM_OPERATOR"
+        assert op_login.json()["user"]["organization_id"] is None
+        op_auth = {"Authorization": f"Bearer {op_login.json()['token']}"}
+
+        # 2. The operator onboards a client: organization, then its Owner.
+        org_resp = client.post(
+            "/organizations", json={"legal_name": "Acme Restaurants", "default_currency": "SAR"},
+            headers=op_auth,
+        )
+        assert org_resp.status_code == 201, org_resp.text
+        org_id = org_resp.json()["id"]
+
         create_user_resp = client.post(
-            "/users", json={"email": "owner@example.com", "password": "s3cret!", "role": "OWNER"}
+            "/users",
+            json={"email": "owner@example.com", "password": "s3cret!", "role": "OWNER",
+                  "organization_id": org_id},
+            headers=op_auth,
         )
         assert create_user_resp.status_code == 201, create_user_resp.text
         user_id = create_user_resp.json()["id"]
+        assert create_user_resp.json()["organization_id"] == org_id
 
-        # 2. Log in.
+        # 3. The client's Owner logs in and works inside their own organization.
         login_resp = client.post(
             "/auth/login", json={"email": "owner@example.com", "password": "s3cret!"}
         )
@@ -102,14 +127,6 @@ class TestFullPipelineThroughRealHttp:
         assert me_resp.status_code == 200
         assert me_resp.json()["id"] == user_id
 
-        # 3. Organization & branch.
-        org_resp = client.post(
-            "/organizations", json={"legal_name": "Acme Restaurants", "default_currency": "SAR"},
-            headers=auth,
-        )
-        assert org_resp.status_code == 201, org_resp.text
-        org_id = org_resp.json()["id"]
-
         branch_resp = client.post(
             "/branches", json={"organization_id": org_id, "name": "Downtown", "timezone": "Asia/Riyadh"},
             headers=auth,
@@ -117,15 +134,13 @@ class TestFullPipelineThroughRealHttp:
         assert branch_resp.status_code == 201, branch_resp.text
         branch_id = branch_resp.json()["id"]
 
-        # Grant the owner access to the branch - Data Import's AuthContext
-        # depends on this being real, not assumed.
-        grant_resp = client.post(
-            f"/users/{user_id}/branch-access", json={"branch_id": branch_id}, headers=auth
-        )
-        assert grant_resp.status_code == 201, grant_resp.text
+        # An Owner sees every branch of their organization with no grants.
+        my_branches = client.get("/auth/me/branches", headers=auth)
+        assert my_branches.status_code == 200
+        assert [b["id"] for b in my_branches.json()] == [branch_id]
 
         # 4. Reference & contract configuration.
-        platform_resp = client.post("/platforms", json={"name": "Talabat"}, headers=auth)
+        platform_resp = client.post("/platforms", json={"name": "Talabat"}, headers=op_auth)
         assert platform_resp.status_code == 201, platform_resp.text
         platform_id = platform_resp.json()["id"]
 
@@ -222,7 +237,8 @@ class TestFullPipelineThroughRealHttp:
         assert report_resp.status_code == 201, report_resp.text
         report_id = report_resp.json()["id"]
 
-        download_resp = client.get(f"/reports/{report_id}/download")
+        assert client.get(f"/reports/{report_id}/download").status_code == 401
+        download_resp = client.get(f"/reports/{report_id}/download", headers=auth)
         assert download_resp.status_code == 200
         assert download_resp.headers["content-type"].startswith("text/csv")
 
@@ -246,7 +262,9 @@ class TestFullPipelineThroughRealHttp:
         assert "report_generated" in events
         assert "notification_attempted" in events
 
-        # 16. Deployment info is reachable with no auth at all.
-        deployment_resp = client.get("/deployment/info")
+        # 16. Deployment info is platform-operator-only.
+        assert client.get("/deployment/info").status_code == 401
+        assert client.get("/deployment/info", headers=auth).status_code == 403
+        deployment_resp = client.get("/deployment/info", headers=op_auth)
         assert deployment_resp.status_code == 200
         assert deployment_resp.json()["license_status"] == "UNLICENSED"

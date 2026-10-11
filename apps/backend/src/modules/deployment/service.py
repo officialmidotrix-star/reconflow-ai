@@ -5,7 +5,7 @@ get_deployment_info() auto-creates the singleton row on first call - there
 is exactly one DeploymentInfo per deployment, and nothing ever needs to
 explicitly "initialize" it first. License status is always computed
 fresh from license_key/license_expires_at, never stored (see models.py).
-Recording a license or an update requires the Owner role, checked against
+Recording a license or an update requires the platform-operator role (PLATFORM_OPERATOR), checked against
 Identity & Access's real User table.
 """
 
@@ -93,8 +93,8 @@ class DeploymentService:
 
     def _ensure_owner(self, user_id: str) -> None:
         user = self._db.get(User, user_id)
-        if user is None or user.role != UserRole.OWNER:
-            raise InsufficientPrivilegeError("Only an Owner can perform this action.")
+        if user is None or user.role != UserRole.PLATFORM_OPERATOR:
+            raise InsufficientPrivilegeError("Only the platform operator can perform this action.")
 
     def _commit(self) -> None:
         try:

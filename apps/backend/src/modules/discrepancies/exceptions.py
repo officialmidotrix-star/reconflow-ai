@@ -13,3 +13,13 @@ class DiscrepancyError_(Exception):
 class DiscrepancyPersistError(DiscrepancyError_):
     error_code = "DISCREPANCY_PERSIST_FAILED"
     http_status = 500
+
+
+class DiscrepancyNotFoundError(DiscrepancyError_):
+    error_code = "DISCREPANCY_NOT_FOUND"
+    http_status = 404
+
+
+class NotACancellationError(DiscrepancyError_):
+    error_code = "NOT_A_CANCELLATION"
+    http_status = 422

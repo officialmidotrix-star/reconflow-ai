@@ -38,7 +38,8 @@ class AuditLogService:
         metadata: dict,
     ) -> None:
         entry = AuditLogEntry(
-            event=event, user_id=user_id, analysis_id=analysis_id, details=metadata or {}
+            event=event, user_id=user_id, analysis_id=analysis_id, details=metadata or {},
+            organization_id=self._organization_for(user_id=user_id, analysis_id=analysis_id),
         )
         try:
             self._db.add(entry)
@@ -51,6 +52,13 @@ class AuditLogService:
                 event, user_id, analysis_id, exc_info=True,
             )
 
+    def _organization_for(self, *, user_id: str, analysis_id: str | None) -> str | None:
+        """Hook: which organization an event belongs to. The base module
+        knows nothing about users or analyses, so it attributes nothing;
+        the composition layer substitutes a subclass that does (see
+        bootstrap/access.py). Must never raise."""
+        return None
+
     def list_entries(
         self,
         *,
@@ -58,8 +66,13 @@ class AuditLogService:
         user_id: str | None = None,
         event: str | None = None,
         limit: int = 100,
+        organization_id: str | None = None,
     ) -> list[AuditLogEntry]:
+        """`organization_id=None` means unrestricted (platform operator);
+        a value restricts the result to that organization's entries."""
         query = select(AuditLogEntry)
+        if organization_id is not None:
+            query = query.where(AuditLogEntry.organization_id == organization_id)
         if analysis_id is not None:
             query = query.where(AuditLogEntry.analysis_id == analysis_id)
         if user_id is not None:

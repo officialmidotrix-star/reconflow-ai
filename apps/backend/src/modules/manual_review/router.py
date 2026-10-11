@@ -44,7 +44,7 @@ def get_current_user_id() -> str:
     response_model=MatchReviewResponse,
     status_code=201,
 )
-async def review_match(
+def review_match(
     reconciliation_match_id: str,
     body: MatchReviewRequest,
     reviewed_by: str = Depends(get_current_user_id),
@@ -69,7 +69,7 @@ async def review_match(
     response_model=DiscrepancyReviewResponse,
     status_code=201,
 )
-async def review_discrepancy(
+def review_discrepancy(
     discrepancy_id: str,
     body: DiscrepancyReviewRequest,
     reviewed_by: str = Depends(get_current_user_id),
@@ -94,7 +94,7 @@ async def review_discrepancy(
     response_model=ManualMatchResponse,
     status_code=201,
 )
-async def create_manual_match(
+def create_manual_match(
     analysis_id: str,
     body: ManualMatchRequest,
     reviewed_by: str = Depends(get_current_user_id),

@@ -39,5 +39,12 @@ class AuditLogEntry(Base):
     analysis_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("analyses.id"), nullable=True, index=True
     )
+    # Tenancy: which organization this event belongs to, resolved at write
+    # time by the composition layer (bootstrap/access.py). NULL = not
+    # attributable to a client organization (e.g. a platform operator's
+    # own login) - visible only to the platform operator.
+    organization_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("organizations.id"), nullable=True, index=True
+    )
     details: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_utcnow, index=True)

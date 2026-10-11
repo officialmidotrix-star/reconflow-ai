@@ -39,7 +39,7 @@ def get_current_user_id() -> str:
 
 
 @router.get("/{analysis_id}/summary", response_model=AnalysisSummaryResponse)
-async def get_summary(
+def get_summary(
     analysis_id: str,
     _requested_by: str = Depends(get_current_user_id),
     service: AnalysisResultsService = Depends(get_results_service),
@@ -53,7 +53,7 @@ async def get_summary(
 
 
 @router.get("/{analysis_id}/discrepancies", response_model=list[DiscrepancyDetailResponse])
-async def list_discrepancies(
+def list_discrepancies(
     analysis_id: str,
     _requested_by: str = Depends(get_current_user_id),
     service: AnalysisResultsService = Depends(get_results_service),

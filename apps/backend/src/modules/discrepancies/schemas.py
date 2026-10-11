@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict
 
-from .models import DiscrepancyCategory, DiscrepancyStatus, Severity
+from .models import CancelledBy, Direction, DiscrepancyCategory, DiscrepancyStatus, Severity, Treatment
 
 
 class DiscrepancyResponse(BaseModel):
@@ -16,7 +16,15 @@ class DiscrepancyResponse(BaseModel):
     category: DiscrepancyCategory
     severity: Severity
     estimated_loss: Decimal
+    treatment: Treatment
+    direction: Direction | None
+    claimable_amount: Decimal | None
+    order_reference: str | None
     created_at: datetime
+
+
+class ConfirmCancellationRequest(BaseModel):
+    cancelled_by: CancelledBy
 
 
 class DiscrepancyRunResponse(BaseModel):
@@ -30,4 +38,5 @@ class DiscrepancyRunResponse(BaseModel):
     high_count: int
     medium_count: int
     low_count: int
+    excluded_refund_void_count: int
     checked_at: datetime

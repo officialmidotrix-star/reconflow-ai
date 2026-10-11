@@ -20,13 +20,38 @@ from decimal import Decimal
 from pydantic import BaseModel
 
 from modules.analysis_orchestration.models import AnalysisStatus
-from modules.discrepancies.models import DiscrepancyCategory, Severity
+from modules.discrepancies.models import Direction, DiscrepancyCategory, Severity, Treatment
 
 
 class DiscrepancyBreakdownItem(BaseModel):
     category: DiscrepancyCategory
     count: int
+    # Gross amount involved, whatever its treatment (what older clients showed).
     total_amount: Decimal
+    # The part of this category that is recoverable, NET of commission.
+    recoverable_amount: Decimal
+
+
+class SummaryGroup(BaseModel):
+    count: int
+    amount: Decimal
+
+
+class SummaryGroups(BaseModel):
+    """The five things a discrepancy can mean. Only `recoverable` is the headline."""
+
+    # Underpaid, claimable. `amount` is NET of commission - the sum of claimable_amount.
+    recoverable: SummaryGroup
+    # Cancelled after preparation; waiting for "who cancelled?". `amount` is gross.
+    needs_confirmation: SummaryGroup
+    # Would be recoverable but there is no (or an ambiguous) commission rate. `amount` is gross.
+    needs_contract: SummaryGroup
+    # Not a loss: money received with no POS order, overpayments, commission charged below contract.
+    to_verify: SummaryGroup
+    # The restaurant's own cancellations. `amount` is gross.
+    not_claimable: SummaryGroup
+    # Calculated before these rules existed - run the analysis again. `amount` is gross.
+    needs_rerun: SummaryGroup
 
 
 class AnalysisSummaryResponse(BaseModel):
@@ -50,8 +75,19 @@ class AnalysisSummaryResponse(BaseModel):
     unmatched_pos_count: int
     unmatched_platform_count: int
 
+    # THE headline: what the restaurant can claim back - underpayments only,
+    # net of commission. Overpayments and unexpected settlements are not in it.
+    total_recoverable_amount: Decimal
+    # Deprecated name for the same number, kept so a frontend deployed before
+    # this change shows the corrected figure instead of breaking.
     total_potential_revenue_leakage: Decimal
+    groups: SummaryGroups
     discrepancy_breakdown: list[DiscrepancyBreakdownItem]
+    # Matched orders that could not be checked for commission / amount errors
+    # because no single commission contract applied. Silent before; never again.
+    orders_not_checked_no_contract: int
+    # Orders with no settlement whose status says refunded / void: no payout expected.
+    excluded_refund_void_count: int
 
     # None for analyses run before lead capture existed, or if the lead
     # call failed after upload for some reason - a results page can still
@@ -74,6 +110,9 @@ class DiscrepancyDetailResponse(BaseModel):
     category: DiscrepancyCategory
     severity: Severity
     estimated_loss: Decimal
+    treatment: Treatment
+    direction: Direction | None
+    claimable_amount: Decimal | None
     # Sourced from Transaction.external_reference via the discrepancy's
     # match - null only if the linked transaction itself was somehow
     # removed, which nothing in this codebase currently does.

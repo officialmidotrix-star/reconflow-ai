@@ -21,7 +21,10 @@ from modules.ai_insights.models import AIInsight
 from modules.analysis_orchestration.models import Analysis, AnalysisStatus
 from modules.analysis_results.exceptions import AnalysisNotFoundError
 from modules.analysis_results.service import AnalysisResultsService
-from modules.discrepancies.models import Discrepancy, DiscrepancyCategory, Severity
+from modules.discrepancies.models import (
+    Direction, Discrepancy, DiscrepancyCategory, DiscrepancyRun, DiscrepancyStatus, Severity, Treatment,
+)
+from modules.financial_comparison.models import ComparisonRun, ComparisonStatus
 from modules.identity_access.models import Base, User  # noqa: F401 - registers "users"
 from modules.imports.models import SourceType, UploadedFile  # noqa: F401 - registers "uploaded_files"
 from modules.lead_capture.models import AnalysisLead
@@ -236,6 +239,8 @@ class TestGetSummary:
                 id="disc-1", analysis_id=ANALYSIS_ID, reconciliation_match_id="match-missing",
                 category=DiscrepancyCategory.MISSING_SETTLEMENT, severity=Severity.MEDIUM,
                 estimated_loss=Decimal("60.25"),
+                treatment=Treatment.RECOVERABLE, direction=Direction.UNDERPAID,
+                claimable_amount=Decimal("51.21"),  # 60.25 gross at a 15% commission, net
             )
         )
         db.add(
@@ -243,6 +248,7 @@ class TestGetSummary:
                 id="disc-2", analysis_id=ANALYSIS_ID, reconciliation_match_id="match-unexpected",
                 category=DiscrepancyCategory.UNEXPECTED_SETTLEMENT, severity=Severity.MEDIUM,
                 estimated_loss=Decimal("55.00"),
+                treatment=Treatment.TO_VERIFY, direction=Direction.NOT_APPLICABLE,
             )
         )
         db.add(
@@ -261,10 +267,15 @@ class TestGetSummary:
         assert summary.matched_count == 4
         assert summary.unmatched_pos_count == 1
         assert summary.unmatched_platform_count == 1
-        assert summary.total_potential_revenue_leakage == Decimal("115.25")
-        breakdown = {b.category: (b.count, b.total_amount) for b in summary.discrepancy_breakdown}
-        assert breakdown[DiscrepancyCategory.MISSING_SETTLEMENT] == (1, Decimal("60.25"))
-        assert breakdown[DiscrepancyCategory.UNEXPECTED_SETTLEMENT] == (1, Decimal("55.00"))
+        # THE headline: underpayments only, net of commission. The 55.00 unexpected
+        # settlement is money the restaurant RECEIVED - it is not in the headline.
+        assert summary.total_recoverable_amount == Decimal("51.21")
+        assert summary.total_potential_revenue_leakage == Decimal("51.21")  # deprecated alias, same number
+        assert (summary.groups.recoverable.count, summary.groups.recoverable.amount) == (1, Decimal("51.21"))
+        assert (summary.groups.to_verify.count, summary.groups.to_verify.amount) == (1, Decimal("55.00"))
+        breakdown = {b.category: (b.count, b.total_amount, b.recoverable_amount) for b in summary.discrepancy_breakdown}
+        assert breakdown[DiscrepancyCategory.MISSING_SETTLEMENT] == (1, Decimal("60.25"), Decimal("51.21"))
+        assert breakdown[DiscrepancyCategory.UNEXPECTED_SETTLEMENT] == (1, Decimal("55.00"), Decimal("0"))
         assert summary.ai_executive_summary == "Two discrepancies found."
         assert summary.ai_provider_name == "fake"
 
@@ -278,6 +289,55 @@ class TestGetSummary:
         summary = service.get_summary(ANALYSIS_ID)
 
         assert summary.matched_count == 9
+
+
+class TestSummaryGroupsAndDisclosure:
+    def _disc(self, db, did, category, treatment, loss, claimable=None, direction=Direction.UNDERPAID):
+        db.add(Discrepancy(
+            id=did, analysis_id=ANALYSIS_ID, reconciliation_match_id=f"m-{did}", category=category,
+            severity=Severity.LOW, estimated_loss=Decimal(loss), treatment=treatment, direction=direction,
+            claimable_amount=Decimal(claimable) if claimable else None,
+        ))
+
+    def test_every_treatment_lands_in_its_own_group_and_only_recoverable_is_the_headline(self, db, service):
+        _seed_analysis(db)
+        C = DiscrepancyCategory
+        self._disc(db, "a", C.MISSING_SETTLEMENT, Treatment.RECOVERABLE, "100.00", "85.00")
+        self._disc(db, "b", C.INCORRECT_COMMISSION, Treatment.RECOVERABLE, "4.00", "4.00")
+        self._disc(db, "c", C.CANCELLED_AFTER_PREPARATION, Treatment.NEEDS_CONFIRMATION, "40.00")
+        self._disc(db, "d", C.MISSING_SETTLEMENT, Treatment.NEEDS_CONTRACT, "70.00")
+        self._disc(db, "e", C.SETTLEMENT_AMOUNT_MISMATCH, Treatment.TO_VERIFY, "3.00", direction=Direction.OVERPAID)
+        self._disc(db, "f", C.CANCELLED_AFTER_PREPARATION, Treatment.NOT_CLAIMABLE, "25.00", direction=Direction.NOT_APPLICABLE)
+        self._disc(db, "g", C.MISSING_SETTLEMENT, Treatment.NEEDS_RERUN, "9.00")
+        db.commit()
+
+        g = service.get_summary(ANALYSIS_ID).groups
+        assert (g.recoverable.count, g.recoverable.amount) == (2, Decimal("89.00"))  # net: 85 + 4
+        assert (g.needs_confirmation.count, g.needs_confirmation.amount) == (1, Decimal("40.00"))
+        assert (g.needs_contract.count, g.needs_contract.amount) == (1, Decimal("70.00"))
+        assert (g.to_verify.count, g.to_verify.amount) == (1, Decimal("3.00"))
+        assert (g.not_claimable.count, g.not_claimable.amount) == (1, Decimal("25.00"))
+        assert (g.needs_rerun.count, g.needs_rerun.amount) == (1, Decimal("9.00"))
+        assert service.get_summary(ANALYSIS_ID).total_recoverable_amount == Decimal("89.00")
+
+    def test_orders_skipped_for_lack_of_a_contract_are_disclosed_not_silent(self, db, service):
+        _seed_analysis(db)
+        db.add(ComparisonRun(analysis_id=ANALYSIS_ID, status=ComparisonStatus.COMPLETED,
+                             compared_count=0, skipped_no_contract_count=973))
+        db.add(DiscrepancyRun(analysis_id=ANALYSIS_ID, status=DiscrepancyStatus.COMPLETED, total_count=0,
+                              critical_count=0, high_count=0, medium_count=0, low_count=0,
+                              excluded_refund_void_count=4))
+        db.commit()
+        summary = service.get_summary(ANALYSIS_ID)
+        assert summary.orders_not_checked_no_contract == 973
+        assert summary.excluded_refund_void_count == 4
+
+    def test_detail_rows_carry_treatment_direction_and_claimable_amount(self, db, service):
+        _seed_analysis(db)
+        self._disc(db, "a", DiscrepancyCategory.MISSING_SETTLEMENT, Treatment.RECOVERABLE, "100.00", "85.00")
+        db.commit()
+        row = service.list_discrepancies(ANALYSIS_ID)[0]
+        assert (row.treatment, row.direction, row.claimable_amount) == (Treatment.RECOVERABLE, Direction.UNDERPAID, Decimal("85.00"))
 
 
 class TestLeadInfoOnSummary:
@@ -316,6 +376,8 @@ class TestListDiscrepancies:
                 id="disc-1", analysis_id=ANALYSIS_ID, reconciliation_match_id="match-1",
                 category=DiscrepancyCategory.MISSING_SETTLEMENT, severity=Severity.MEDIUM,
                 estimated_loss=Decimal("60.25"),
+                treatment=Treatment.RECOVERABLE, direction=Direction.UNDERPAID,
+                claimable_amount=Decimal("51.21"),  # 60.25 gross at a 15% commission, net
             )
         )
         db.commit()

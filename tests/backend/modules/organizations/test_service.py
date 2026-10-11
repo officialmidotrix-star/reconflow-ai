@@ -26,7 +26,6 @@ from modules.organizations.dependencies import InMemoryAuditLogger
 from modules.organizations.exceptions import (
     BranchNotFoundError,
     InvalidTimezoneError,
-    OrganizationAlreadyExistsError,
     OrganizationNotFoundError,
 )
 from modules.organizations.service import OrganizationService
@@ -70,19 +69,20 @@ class TestCreateOrganization:
         assert org.legal_name == "Acme Restaurants"
         assert org.default_currency == "SAR"  # normalized to uppercase
 
-    def test_second_organization_rejected(self, service):
-        _make_org(service)
-        with pytest.raises(OrganizationAlreadyExistsError):
-            _make_org(service, legal_name="Someone Else")
+    def test_multiple_organizations_are_supported(self, service):
+        first = _make_org(service)
+        second = _make_org(service, legal_name="Someone Else", default_currency="aed")
+        assert first.id != second.id
+        assert {o.id for o in service.list_organizations()} == {first.id, second.id}
 
 
-class TestGetCurrentOrganization:
-    def test_returns_none_when_empty(self, service):
-        assert service.get_current_organization() is None
+class TestGetOrganization:
+    def test_returns_none_when_unknown(self, service):
+        assert service.get_organization(organization_id="nope") is None
 
     def test_returns_the_org_once_created(self, service):
         org = _make_org(service)
-        assert service.get_current_organization().id == org.id
+        assert service.get_organization(organization_id=org.id).id == org.id
 
 
 class TestCreateBranch:

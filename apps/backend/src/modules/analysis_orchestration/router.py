@@ -36,7 +36,7 @@ def get_current_user_id() -> str:
 
 
 @router.post("", response_model=AnalysisResponse, status_code=201)
-async def create_analysis(
+def create_analysis(
     body: CreateAnalysisRequest,
     created_by: str = Depends(get_current_user_id),
     service: AnalysisOrchestrationService = Depends(get_orchestration_service),
@@ -51,7 +51,7 @@ async def create_analysis(
 
 
 @router.get("/{analysis_id}", response_model=AnalysisResponse)
-async def get_analysis(
+def get_analysis(
     analysis_id: str,
     service: AnalysisOrchestrationService = Depends(get_orchestration_service),
 ) -> AnalysisResponse:
@@ -65,7 +65,7 @@ async def get_analysis(
 
 
 @router.post("/{analysis_id}/versions", response_model=AnalysisResponse, status_code=201)
-async def create_new_version(
+def create_new_version(
     analysis_id: str,
     requested_by: str = Depends(get_current_user_id),
     service: AnalysisOrchestrationService = Depends(get_orchestration_service),
@@ -80,7 +80,7 @@ async def create_new_version(
 
 
 @router.post("/{analysis_id}/mark-processing", response_model=AnalysisResponse)
-async def mark_processing(
+def mark_processing(
     analysis_id: str,
     requested_by: str = Depends(get_current_user_id),
     service: AnalysisOrchestrationService = Depends(get_orchestration_service),
@@ -95,7 +95,7 @@ async def mark_processing(
 
 
 @router.post("/{analysis_id}/mark-completed", response_model=AnalysisResponse)
-async def mark_completed(
+def mark_completed(
     analysis_id: str,
     requested_by: str = Depends(get_current_user_id),
     service: AnalysisOrchestrationService = Depends(get_orchestration_service),
@@ -110,7 +110,7 @@ async def mark_completed(
 
 
 @router.post("/{analysis_id}/mark-failed", response_model=AnalysisResponse)
-async def mark_failed(
+def mark_failed(
     analysis_id: str,
     body: MarkFailedRequest,
     requested_by: str = Depends(get_current_user_id),

@@ -7,11 +7,11 @@ that resolves a bearer token to a user id via IdentityAccessService.
 Wiring every other router's own placeholder to actually call this is
 application-assembly work, not this module's job (see package docstring).
 
-POST /users is deliberately open (no auth required) - bootstrapping the
-very first account has to be possible before anyone can log in. Real
-deployments would want this locked down (invite-only, or "first user
-becomes Owner") - flagged here, not solved, since that's a product
-decision beyond this module's scope.
+POST /users requires a signed-in OWNER (own organization only) or the
+platform operator. The very first account is no longer created over HTTP:
+the platform operator is created by bootstrap/create_operator.py (or the
+startup seed), and the operator then creates each client organization and
+its first OWNER. Route-level authorization lives in bootstrap/access.py.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .exceptions import IdentityAccessError_
 from .schemas import (
+    ChangePasswordRequest,
     CreateUserRequest,
     GrantBranchAccessRequest,
     LoginRequest,
@@ -42,7 +43,7 @@ def get_identity_access_service() -> IdentityAccessService:
     )
 
 
-async def get_current_user_id(
+def get_current_user_id(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
     service: IdentityAccessService = Depends(get_identity_access_service),
 ) -> str:
@@ -63,12 +64,16 @@ async def get_current_user_id(
 
 
 @router.post("/users", response_model=UserResponse, status_code=201)
-async def create_user(
+def create_user(
     body: CreateUserRequest,
+    requested_by: str = Depends(get_current_user_id),
     service: IdentityAccessService = Depends(get_identity_access_service),
 ) -> UserResponse:
     try:
-        user = service.create_user(email=body.email, password=body.password, role=body.role)
+        user = service.create_user(
+            email=body.email, password=body.password, role=body.role,
+            organization_id=body.organization_id, created_by=requested_by,
+        )
     except IdentityAccessError_ as exc:
         raise HTTPException(
             status_code=exc.http_status, detail={"error_code": exc.error_code, "message": exc.message}
@@ -76,8 +81,44 @@ async def create_user(
     return UserResponse.model_validate(user)
 
 
+@router.get("/users", response_model=list[UserResponse])
+def list_users(
+    requested_by: str = Depends(get_current_user_id),
+    service: IdentityAccessService = Depends(get_identity_access_service),
+) -> list[UserResponse]:
+    """Operator: every user. Owner: the users of their own organization."""
+    try:
+        users = service.list_users(actor_id=requested_by)
+    except IdentityAccessError_ as exc:
+        raise HTTPException(
+            status_code=exc.http_status, detail={"error_code": exc.error_code, "message": exc.message}
+        ) from exc
+    return [UserResponse.model_validate(u) for u in users]
+
+
+@router.post("/users/{user_id}/password", status_code=204)
+def change_password(
+    user_id: str,
+    body: ChangePasswordRequest,
+    requested_by: str = Depends(get_current_user_id),
+    service: IdentityAccessService = Depends(get_identity_access_service),
+) -> None:
+    """Change your own password (send `current_password`), or - as the
+    platform operator, or as an Owner for a user of your own organization -
+    reset someone else's. All of the target's sessions are revoked."""
+    try:
+        service.change_password(
+            actor_id=requested_by, target_user_id=user_id,
+            new_password=body.new_password, current_password=body.current_password,
+        )
+    except IdentityAccessError_ as exc:
+        raise HTTPException(
+            status_code=exc.http_status, detail={"error_code": exc.error_code, "message": exc.message}
+        ) from exc
+
+
 @router.post("/auth/login", response_model=LoginResponse)
-async def login(
+def login(
     body: LoginRequest,
     service: IdentityAccessService = Depends(get_identity_access_service),
 ) -> LoginResponse:
@@ -91,7 +132,7 @@ async def login(
 
 
 @router.post("/auth/logout", status_code=204)
-async def logout(
+def logout(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
     service: IdentityAccessService = Depends(get_identity_access_service),
 ) -> None:
@@ -100,7 +141,7 @@ async def logout(
 
 
 @router.get("/auth/me", response_model=UserResponse)
-async def get_me(
+def get_me(
     user_id: str = Depends(get_current_user_id),
     service: IdentityAccessService = Depends(get_identity_access_service),
 ) -> UserResponse:
@@ -109,7 +150,7 @@ async def get_me(
 
 
 @router.post("/users/{user_id}/branch-access", status_code=201)
-async def grant_branch_access(
+def grant_branch_access(
     user_id: str,
     body: GrantBranchAccessRequest,
     requested_by: str = Depends(get_current_user_id),

@@ -11,7 +11,7 @@ class DeploymentError_(Exception):
 
 
 class InsufficientPrivilegeError(DeploymentError_):
-    """Recording a license or an update requires the Owner role - checked
+    """Recording a license or an update requires the platform-operator role - checked
     against Identity & Access's real User table, not a Protocol stub."""
 
     error_code = "INSUFFICIENT_PRIVILEGE"

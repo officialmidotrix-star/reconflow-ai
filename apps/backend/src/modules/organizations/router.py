@@ -37,8 +37,21 @@ def get_current_user_id() -> str:
     raise NotImplementedError("Wire up real authentication in the Identity & Access module.")
 
 
+def get_current_organization_id() -> str | None:
+    """Placeholder wired at start-up to the signed-in user's own
+    organization id (None for the platform operator, who has no single
+    'current' organization)."""
+    raise NotImplementedError("Wire up the access context at application start-up.")
+
+
+def get_branch_scope() -> frozenset[str] | None:
+    """Placeholder wired at start-up. None = every branch of the
+    organization (Owner / operator); a set = only those branches."""
+    raise NotImplementedError("Wire up the access context at application start-up.")
+
+
 @router.post("/organizations", response_model=OrganizationResponse, status_code=201)
-async def create_organization(
+def create_organization(
     body: CreateOrganizationRequest,
     requested_by: str = Depends(get_current_user_id),
     service: OrganizationService = Depends(get_organization_service),
@@ -56,15 +69,18 @@ async def create_organization(
 
 
 @router.get("/organizations/current", response_model=OrganizationResponse | None)
-async def get_current_organization(
+def get_current_organization(
+    organization_id: str | None = Depends(get_current_organization_id),
     service: OrganizationService = Depends(get_organization_service),
 ) -> OrganizationResponse | None:
-    org = service.get_current_organization()
+    if organization_id is None:
+        return None
+    org = service.get_organization(organization_id=organization_id)
     return OrganizationResponse.model_validate(org) if org else None
 
 
 @router.post("/branches", response_model=BranchResponse, status_code=201)
-async def create_branch(
+def create_branch(
     body: CreateBranchRequest,
     requested_by: str = Depends(get_current_user_id),
     service: OrganizationService = Depends(get_organization_service),
@@ -82,7 +98,7 @@ async def create_branch(
 
 
 @router.get("/branches/{branch_id}", response_model=BranchResponse)
-async def get_branch(
+def get_branch(
     branch_id: str,
     service: OrganizationService = Depends(get_organization_service),
 ) -> BranchResponse:
@@ -96,9 +112,10 @@ async def get_branch(
 
 
 @router.get("/organizations/{organization_id}/branches", response_model=list[BranchResponse])
-async def list_branches(
+def list_branches(
     organization_id: str,
+    branch_scope: frozenset[str] | None = Depends(get_branch_scope),
     service: OrganizationService = Depends(get_organization_service),
 ) -> list[BranchResponse]:
-    branches = service.list_branches(organization_id=organization_id)
+    branches = service.list_branches(organization_id=organization_id, only_branch_ids=branch_scope)
     return [BranchResponse.model_validate(b) for b in branches]

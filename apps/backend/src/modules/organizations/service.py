@@ -23,7 +23,6 @@ from .dependencies import AuditLogger
 from .exceptions import (
     BranchNotFoundError,
     InvalidTimezoneError,
-    OrganizationAlreadyExistsError,
     OrganizationNotFoundError,
     OrganizationPersistError,
 )
@@ -38,12 +37,6 @@ class OrganizationService:
     def create_organization(
         self, *, legal_name: str, default_currency: str, requested_by: str
     ) -> Organization:
-        existing = self._db.execute(select(Organization)).scalars().first()
-        if existing is not None:
-            raise OrganizationAlreadyExistsError(
-                "An organization already exists for this deployment - only one is supported."
-            )
-
         org = Organization(legal_name=legal_name, default_currency=default_currency.upper())
         self._db.add(org)
         self._commit()
@@ -55,8 +48,13 @@ class OrganizationService:
         )
         return org
 
-    def get_current_organization(self) -> Organization | None:
-        return self._db.execute(select(Organization)).scalars().first()
+    def get_organization(self, *, organization_id: str) -> Organization | None:
+        return self._db.get(Organization, organization_id)
+
+    def list_organizations(self) -> list[Organization]:
+        return self._db.execute(
+            select(Organization).order_by(Organization.created_at)
+        ).scalars().all()
 
     def create_branch(
         self, *, organization_id: str, name: str, timezone: str, requested_by: str
@@ -83,10 +81,17 @@ class OrganizationService:
             raise BranchNotFoundError("We couldn't find that branch.")
         return branch
 
-    def list_branches(self, *, organization_id: str) -> list[Branch]:
-        return self._db.execute(
-            select(Branch).where(Branch.organization_id == organization_id)
-        ).scalars().all()
+    def list_branches(
+        self, *, organization_id: str, only_branch_ids: frozenset[str] | None = None
+    ) -> list[Branch]:
+        """`only_branch_ids=None` means every branch of the organization;
+        a set restricts the result to those branches (a non-Owner's grants)."""
+        query = select(Branch).where(Branch.organization_id == organization_id)
+        if only_branch_ids is not None:
+            if not only_branch_ids:
+                return []
+            query = query.where(Branch.id.in_(only_branch_ids))
+        return self._db.execute(query.order_by(Branch.name)).scalars().all()
 
     # -- satisfies modules.normalization.dependencies.AnalysisTimezoneLookup --
 

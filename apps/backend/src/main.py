@@ -4,26 +4,39 @@ ReconFlow AI - application entry point.
 Run with: uvicorn main:app --reload (from apps/backend/src/)
 
 Everything module-specific lives in the 16 modules themselves; everything
-here is composition - creating tables, including routers, and wiring
+here is composition - verifying the schema, including routers, and wiring
 every placeholder dependency to its real implementation, per
 bootstrap/wiring.py.
 """
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from bootstrap.config import get_allowed_origins
-from bootstrap.database import create_all_tables
+from bootstrap.schema import ensure_schema
+from bootstrap.seed import run_operator_seed
+from bootstrap.seed_demo import run_demo_seed
 from bootstrap.wiring import register_all
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    create_all_tables()
+    ensure_schema()
+    run_operator_seed()
+    run_demo_seed()  # only if RECONFLOW_SEED_DEMO_DATA=1: clearly labelled test data
+    # Route handlers run in a thread pool; keep it within the database pool
+    # (RECONFLOW_DB_POOL_SIZE + RECONFLOW_DB_MAX_OVERFLOW, default 20) so
+    # threads never starve waiting for a connection.
+    import anyio.to_thread
+
+    anyio.to_thread.current_default_thread_limiter().total_tokens = int(
+        os.environ.get("RECONFLOW_THREAD_LIMIT", "16")
+    )
     yield
 
 
@@ -46,8 +59,6 @@ app.add_middleware(
 )
 
 register_all(app)
-from bootstrap.seed import run_owner_seed
-run_owner_seed()
 
 
 @app.get("/health", tags=["health"])

@@ -10,15 +10,6 @@ class OrganizationError_(Exception):
         self.message = message
 
 
-class OrganizationAlreadyExistsError(OrganizationError_):
-    """One deployment serves exactly one customer - a second organization
-    is rejected, the same singleton discipline Data Import already
-    applies to its upload slots."""
-
-    error_code = "ORGANIZATION_ALREADY_EXISTS"
-    http_status = 409
-
-
 class OrganizationNotFoundError(OrganizationError_):
     error_code = "ORGANIZATION_NOT_FOUND"
     http_status = 404

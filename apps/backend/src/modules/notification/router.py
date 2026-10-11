@@ -31,7 +31,7 @@ def get_current_user_id() -> str:
 
 
 @router.post("", response_model=NotificationResponse, status_code=201)
-async def send_notification(
+def send_notification(
     analysis_id: str,
     body: SendNotificationRequest,
     requested_by: str = Depends(get_current_user_id),

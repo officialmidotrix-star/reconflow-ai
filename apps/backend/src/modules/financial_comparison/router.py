@@ -30,7 +30,7 @@ def get_current_user_id() -> str:
 
 
 @router.post("", response_model=ComparisonRunResponse, status_code=201)
-async def run_comparison(
+def run_comparison(
     analysis_id: str,
     requested_by: str = Depends(get_current_user_id),
     service: ComparisonService = Depends(get_comparison_service),

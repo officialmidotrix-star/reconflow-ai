@@ -32,7 +32,7 @@ def get_current_user_id() -> str:
 
 
 @router.post("", response_model=NormalizationRunResponse, status_code=201)
-async def normalize_uploaded_file(
+def normalize_uploaded_file(
     uploaded_file_id: str,
     requested_by: str = Depends(get_current_user_id),
     service: NormalizationService = Depends(get_normalization_service),

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Protocol
 
 
@@ -24,6 +25,14 @@ class AuditLogger(Protocol):
         analysis_id: str | None,
         metadata: dict,
     ) -> None: ...
+
+
+class CommissionRateLookup(Protocol):
+    """Same shape Financial Comparison's ContractLookup has; the real
+    ReferenceContractService satisfies both. None = no contract, or more than
+    one active contract (ambiguous) - never guessed."""
+
+    def get_commission_rate(self, *, analysis_id: str, as_of: datetime) -> Decimal | None: ...
 
 
 @dataclass

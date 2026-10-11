@@ -43,8 +43,13 @@ def service(db, audit_logger):
     return DeploymentService(db=db, audit_logger=audit_logger)
 
 
-def _make_user(db, *, role: UserRole = UserRole.OWNER, email: str = "owner@example.com") -> User:
-    user = User(email=email, password_hash="x", role=role)
+def _make_user(
+    db, *, role: UserRole = UserRole.PLATFORM_OPERATOR, email: str = "operator@example.com"
+) -> User:
+    # Recording a license/update is a platform-operator action; client users
+    # belong to an organization (DB CHECK ck_users_operator_org).
+    org_id = None if role == UserRole.PLATFORM_OPERATOR else "org-1"
+    user = User(email=email, password_hash="x", role=role, organization_id=org_id)
     db.add(user)
     db.commit()
     db.refresh(user)
